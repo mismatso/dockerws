@@ -1,0 +1,13 @@
+{
+  "php": "8.4",
+  "php_versions": ["8.3", "8.4", "8.5"],
+  "mysql_image": "mysql:8.4",
+  "mariadb_image": "mariadb:11.4",
+  "postgres_image": "postgres:17-bookworm",
+  "nginx_image": "nginx:stable-alpine",
+  "web_memory": "512m",
+  "db_memory": "768m",
+  "backup_dir": "/var/backups/dockerws",
+  "retention_days": 30,
+  "backup_timeout": 1800
+}

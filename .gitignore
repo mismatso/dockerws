@@ -1,0 +1,22 @@
+# Datos locales: nunca publicar aplicaciones, credenciales o certificados.
+/sites/*
+!/sites/.gitkeep
+/proxy/conf.d/*
+!/proxy/conf.d/.gitkeep
+/proxy/compose.generated.yaml
+/config/local.json
+/.state/
+/.aws/
+/.agents/
+/.codex/
+.env
+*.sql
+*.sql.gz
+*.sqlite*
+*.dump
+*.pem
+*.key
+*.tar.gz
+__pycache__/
+*.pyc
+old/
