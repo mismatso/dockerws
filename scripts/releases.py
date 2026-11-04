@@ -121,6 +121,12 @@ def migration_files(folder):
     return sorted({f.stem for f in files})
 
 
+def unknown_migrations(applied, known):
+    """Migraciones aplicadas en la base que el release destino no conoce."""
+    known = set(known)
+    return [m for m in applied if m not in known]
+
+
 def prune(row, keep):
     """Borra releases viejos: conserva los `keep` más recientes, el activo y su anterior."""
     if keep < 2:

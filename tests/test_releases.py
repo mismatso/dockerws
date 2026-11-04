@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Releases atómicos: estructura, despliegue y adopción."""
+"""Releases atómicos: estructura, despliegue, vuelta atrás y adopción."""
 import json
 import os
 import shutil
@@ -47,10 +47,12 @@ class ReleaseTests(SiteTestCase):
         self.populate(self.site / "app", "v1", ["2024_01_01_000000_create_users"])
         (self.site / "app/storage/logs/laravel.log").write_text("datos de producción\n")
         self.recorder = ReleaseRecorder(self.site)
+        self.applied = ["2024_01_01_000000_create_users"]
         for item in [patch.object(deploy, "run", self.recorder), patch.object(deploy, "build_quiet"),
                      patch.object(deploy, "fix_owner"), patch("builtins.print"),
                      patch.object(deploy, "running_services", return_value=["db", "web", "scheduler"]),
                      patch.object(deploy, "app_services", return_value=["db", "web", "scheduler"]),
+                     patch.object(deploy, "applied_migrations", side_effect=lambda row, service: list(self.applied)),
                      patch.object(deploy, "COMPOSER_CACHE", self.root / "cache")]:
             item.start()
             self.patches.append(item)
@@ -232,11 +234,76 @@ class ReleaseTests(SiteTestCase):
         self.assertEqual(list((release / "storage").iterdir()), [])
         self.assertEqual(len(releases.read_meta(self.row, "20261104T000003Z")["commit"]), 40)
 
-    # --- Sitios sin releases ----------------------------------------------------------------
+    # --- Vuelta atrás -----------------------------------------------------------------------
+
+    def test_rollback_switches_and_regenerates_caches(self):
+        initial = self.init()
+        new = self.deploy("v2", ["2024_01_01_000000_create_users"])
+        self.recorder.calls.clear()
+        self.recorder.targets.clear()
+        deploy.deploy(self.row, rollback="")
+        self.assertEqual(releases.current(self.row), initial)
+        self.assertEqual(self.recorder.target_at("artisan optimize"), f"releases/{new}")
+        self.assertIn(f"/releases/{initial}:/var/www/html:ro", next(c for c in self.recorder.calls if "optimize" in c))
+        self.assertIn(f"rollback {new} -> {initial}", (self.site / "releases/history.log").read_text())
+        # Se puede volver hacia adelante indicando el release.
+        deploy.deploy(self.row, rollback=new)
+        self.assertEqual(releases.current(self.row), new)
+
+    def test_rollback_refuses_unknown_migrations_unless_forced(self):
+        initial = self.init()
+        self.deploy("v2", ["2024_01_01_000000_create_users", "2024_06_01_000000_add_phone"])
+        self.applied.append("2024_06_01_000000_add_phone")
+        with self.assertRaises(deploy.DeployError) as error:
+            deploy.deploy(self.row, rollback="")
+        self.assertIn("2024_06_01_000000_add_phone", str(error.exception))
+        self.assertIn(BACKUP, str(error.exception))
+        self.assertNotEqual(releases.current(self.row), initial)
+        deploy.deploy(self.row, rollback="", force=True)
+        self.assertEqual(releases.current(self.row), initial)
+
+    def test_package_migrations_count_as_known(self):
+        folder = self.root / "rel"
+        (folder / "vendor/acme/pkg/database/migrations").mkdir(parents=True)
+        (folder / "vendor/acme/pkg/database/migrations/2020_01_01_000000_pkg.php").write_text("<?php\n")
+        self.assertEqual(releases.migration_files(folder), ["2020_01_01_000000_pkg"])
+        self.assertEqual(releases.unknown_migrations(["2020_01_01_000000_pkg", "x"], ["2020_01_01_000000_pkg"]), ["x"])
+
+    # --- Permisos con sudo ------------------------------------------------------------------
+
+    def test_sudo_rules(self):
+        self.init()
+        self.deploy("v2", [])
+        sudo = patch.dict(os.environ, {"SUDO_UID": "1001", "SUDO_USER": "deploy"})
+        with sudo:
+            for options in ({"init": True}, {"revert": True}, {"rollback": "", "force": True}):
+                with self.subTest(options=options), self.assertRaises(deploy.DeployError):
+                    deploy.deploy(self.row, **options)
+            # Por defecto, la vuelta atrás sin --force está permitida con sudo.
+            deploy.deploy(self.row, rollback="")
+        self.assertIn("deploy rollback", (self.site / "releases/history.log").read_text())
+        # Si la base tiene migraciones que el destino no conoce, hace falta --force (solo root).
+        self.deploy("v3", ["2024_01_01_000000_create_users", "2024_06_01_000000_add_phone"])
+        self.applied.append("2024_06_01_000000_add_phone")
+        with sudo:
+            with self.assertRaises(deploy.DeployError) as error:
+                deploy.deploy(self.row, rollback="")
+            self.assertIn("2024_06_01_000000_add_phone", str(error.exception))
+            # Se puede desactivar en config/local.json.
+            config = json.loads((self.root / "config/defaults.json").read_text())
+            (self.root / "config/local.json").write_text(json.dumps({**config, "deploy_user_rollback": False}))
+            self.applied.remove("2024_06_01_000000_add_phone")
+            with self.assertRaises(deploy.DeployError) as error:
+                deploy.deploy(self.row, rollback="")
+            self.assertIn("deploy_user_rollback", str(error.exception))
 
     def test_in_place_sites_reject_release_options(self):
+        with self.assertRaises(ValueError):
+            deploy.deploy(self.row, rollback="")
         with self.assertRaises(deploy.DeployError):
             deploy.deploy(self.row, assets=True)
+        with self.assertRaises(deploy.DeployError):
+            deploy.deploy(self.row, force=True)
         with self.assertRaises(deploy.DeployError):
             deploy.deploy(self.row, maintenance=False)
         self.init()

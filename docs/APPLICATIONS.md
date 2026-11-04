@@ -174,7 +174,7 @@ Límite de confianza: quien despliega decide el código que se ejecuta como UID 
 
 Sin releases, el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Con [releases atómicos](#releases-atómicos) el código nuevo se prepara aparte y se activa de una vez.
 
-Con sudo no se permiten `--init-releases` ni `--revert-releases`.
+Con sudo no se permiten `--init-releases`, `--revert-releases` ni `--force`. `--rollback` sí está permitido: el usuario de despliegue ya decide qué código se publica, así que volver a un release anterior no le da un privilegio nuevo y permite reaccionar rápido ante un incidente. La comprobación de migraciones se aplica igual. Si la base tiene migraciones que el release destino no conoce, la vuelta atrás requiere `--force`, y esa decisión queda en manos de root. Para que solo root pueda volver atrás, pon `"deploy_user_rollback": false` en `config/local.json`.
 
 ### Releases atómicos
 
@@ -186,7 +186,7 @@ sites/DOMINIO/
   releases/
     20261104T063055Z/     Release anterior, intacto
     20261104T063322Z/     Código (root), vendor/, bootstrap/cache (33:33), storage/ vacío
-    history.log           Activaciones, con el usuario que las hizo
+    history.log           Activaciones y vueltas atrás, con el usuario que las hizo
   shared/storage/         storage/ de Laravel, común a todos los releases
   repo.git/               Mirror opcional para --ref
   compose.d/90-releases.yaml
@@ -209,6 +209,15 @@ Con releases, `deploy.sh` admite los mismos orígenes y opciones:
 5. Recrea los servicios, `artisan up`, gancho `post-deploy` y limpieza: se conservan los últimos `keep_releases` (5), más el activo y el anterior.
 
 Si falla antes de migrar, el sitio vuelve solo a estar en línea con el release anterior. Si falla en las migraciones, queda en mantenimiento con el release anterior, para que decidas si corregir y redesplegar o restaurar el respaldo.
+
+**Volver atrás:**
+
+```bash
+sudo ./scripts/deploy.sh app.example.com --rollback                    # Al release anterior
+sudo ./scripts/deploy.sh app.example.com --rollback 20261104T063055Z   # A uno concreto (también hacia adelante)
+```
+
+Regenera las cachés de Laravel en el release destino, cambia el enlace y recrea los servicios. **No revierte migraciones:** compara la tabla `migrations` con las migraciones que conoce el release destino (incluidas las de paquetes en `vendor/`). Si la base tiene alguna que el destino no conoce, se niega y muestra el respaldo tomado antes del despliegue. Si sabes que las migraciones son compatibles con el código anterior (por ejemplo, solo agregan una tabla), root puede usar `--force`. Si no, restaura el respaldo con `restore.sh` y luego vuelve atrás.
 
 **`--ref` con releases** usa un mirror en lugar de un checkout en `app/`:
 

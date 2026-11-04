@@ -155,7 +155,7 @@ sudo ./scripts/deploy.sh app.example.com --ref main
 
 En Laravel: mantenimiento, respaldo de la base del sitio, sincronización del código, composer, `migrate --force`, `optimize`, recreación de los contenedores y `artisan up`. Admite ganchos `pre-deploy`/`post-deploy`. Los contenedores siempre se recrean, así que no hace falta reiniciar `web` después. Node no está en la imagen PHP: los assets se compilan fuera. Para desplegar sin dar `sudo` amplio, `host/install-deploy-user.sh` crea una carpeta de subida y una regla de sudo limitada a `deploy.sh`.
 
-Opcionalmente, `deploy.sh DOMINIO --init-releases` cambia el sitio a releases atómicos: el código se prepara con el sitio en línea, las migraciones corren antes de activarlo y el cambio de release es atómico. Detalles en [la guía de aplicaciones](docs/APPLICATIONS.md#desplegar-laravel-y-php).
+Opcionalmente, `deploy.sh DOMINIO --init-releases` cambia el sitio a releases atómicos: el código se prepara con el sitio en línea, las migraciones corren antes de activarlo y `deploy.sh DOMINIO --rollback` vuelve al release anterior si la base lo permite. Detalles en [la guía de aplicaciones](docs/APPLICATIONS.md#desplegar-laravel-y-php).
 
 ## Operación
 

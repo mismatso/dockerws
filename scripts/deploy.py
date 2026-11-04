@@ -397,6 +397,13 @@ class Deployment:
 
 # --- Releases atómicos ----------------------------------------------------------------------
 
+APPLIED_PHP = (
+    'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; '
+    '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap(); '
+    '$c = config("database.migrations"); $t = is_array($c) ? ($c["table"] ?? "migrations") : ($c ?: "migrations"); '
+    'echo "DOCKERWS:", json_encode(Illuminate\\Support\\Facades\\DB::table($t)->pluck("migration")), PHP_EOL;')
+
+
 def release_artisan(row, service, release, *args, deps=False):
     """artisan con un release concreto montado (antes de activarlo), como 33:33."""
     command = compose_args(row) + ["run", "--rm"] + ([] if deps else ["--no-deps"])
@@ -404,7 +411,7 @@ def release_artisan(row, service, release, *args, deps=False):
 
 
 def history(row, text):
-    """Registro de activaciones, con quién las hizo."""
+    """Registro de activaciones y vueltas atrás, con quién las hizo."""
     who = os.environ.get("SUDO_USER") or "root"
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with (releases.releases_dir(row) / "history.log").open("a") as log:
@@ -551,9 +558,10 @@ class ReleaseDeployment(Deployment):
                 shutil.rmtree(folder)
 
     def recover(self):
+        domain = self.row["domain"]
         if self.switched:
             print(f"El release {self.name} quedó activo, pero el despliegue falló después. El sitio sigue en "
-                  f"mantenimiento. Corrige y vuelve a desplegar, o activa el release anterior.", file=sys.stderr)
+                  f"mantenimiento. Vuelve atrás con: deploy.sh {domain} --rollback", file=sys.stderr)
             return
         self.discard()
         if self.maintenance and not self.db_touched:
@@ -590,6 +598,68 @@ class ReleaseDeployment(Deployment):
         if removed:
             print("Releases eliminados: " + ", ".join(removed))
         print(f"Despliegue terminado: {self.row['domain']} ({self.name})")
+
+
+def applied_migrations(row, service):
+    result = subprocess.run(compose_args(row) + ["run", "--rm", "--user", "33:33", service, "php", "-r", APPLIED_PHP],
+                            capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        if line.startswith("DOCKERWS:"):
+            return json.loads(line[len("DOCKERWS:"):])
+    raise DeployError("No se pudo leer la tabla de migraciones; revisa la conexión a la base")
+
+
+class Rollback(Deployment):
+    """Vuelve a un release anterior. No revierte migraciones: se niega si el destino no las conoce."""
+
+    def __init__(self, row, target=None, force=False, service="web", verbose=False):
+        super().__init__(row, service=service, verbose=verbose, backup=False)
+        self.active = releases.current(row)
+        self.target = target or releases.previous(row)
+        self.folder = releases.path(row, self.target)
+        if self.target == self.active:
+            raise DeployError(f"{self.target} ya es el release activo")
+        self.force = force
+
+    def check_migrations(self):
+        if not self.laravel:
+            return
+        meta = releases.read_meta(self.row, self.target)
+        known = meta["migrations"] if isinstance(meta.get("migrations"), list) else releases.migration_files(self.folder)
+        unknown = releases.unknown_migrations(applied_migrations(self.row, self.service), known)
+        if not unknown:
+            return
+        listed = ", ".join(unknown[:10]) + (f" y {len(unknown) - 10} más" if len(unknown) > 10 else "")
+        if self.force:
+            print(f"AVISO: --force con migraciones que {self.target} no conoce: {listed}", file=sys.stderr)
+            return
+        backup = releases.read_meta(self.row, self.active).get("backup")
+        raise DeployError(
+            f"La base tiene migraciones que {self.target} no conoce: {listed}. El código anterior podría fallar o "
+            f"dañar datos. Si las migraciones son compatibles, root puede usar --force; si no, restaura el respaldo "
+            f"previo al despliegue" + (f" ({backup})" if backup else "") + " y luego vuelve atrás.")
+
+    def execute(self):
+        self.step(f"Vuelta atrás: {self.active} -> {self.target}")
+        self.check_migrations()
+        build_quiet(self.row, self.verbose)
+        try:
+            self.enter_maintenance()
+            if self.laravel:
+                # La caché de configuración del release anterior se generó con el entorno de entonces.
+                self.step(f"Cachés de Laravel (optimize) en {self.target}")
+                fix_owner(self.row, self.folder)
+                run(release_artisan(self.row, self.service, self.folder, "optimize", deps=True))
+            releases.switch(self.row, self.target)
+            history(self.row, f"rollback {self.active} -> {self.target}")
+            self.restart()
+            self.leave_maintenance()
+        except BaseException:
+            if self.maintenance:
+                print(f"La vuelta atrás falló; el sitio quedó en mantenimiento con el release "
+                      f"{releases.current(self.row)}.", file=sys.stderr)
+            raise
+        print(f"Vuelta atrás terminada: {self.row['domain']} ({self.target})")
 
 
 def recreate(row, service, running):
@@ -689,24 +759,32 @@ def revert_releases(row, service="web"):
           "bórralos cuando ya no los necesites.")
 
 
-def deploy(row, init=False, revert=False, assets=False, maintenance=True, **options):
+def deploy(row, rollback=None, init=False, revert=False, force=False, assets=False, maintenance=True, **options):
     uid = sudo_uid()
+    if force and rollback is None:
+        raise DeployError("--force solo se usa con --rollback")
     if uid is not None:
-        if init or revert:
-            raise DeployError("--init-releases y --revert-releases solo están permitidos para root")
-        options["source"] = restrict_for_sudo(row, uid, options.get("source"), options.get("ref"),
-                                              options.get("backup", True))
+        if init or revert or force:
+            raise DeployError("--init-releases, --revert-releases y --force solo están permitidos para root")
+        if rollback is not None:
+            if not settings().get("deploy_user_rollback", True):
+                raise DeployError("La vuelta atrás con sudo está desactivada (deploy_user_rollback en config/local.json)")
+        else:
+            options["source"] = restrict_for_sudo(row, uid, options.get("source"), options.get("ref"),
+                                                  options.get("backup", True))
     lock_path = ROOT / "sites" / row["domain"] / ".deploy.lock"
     with lock_path.open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise DeployError("Ya hay un despliegue en curso para este sitio")
-        service = options.get("service", "web")
+        service, verbose = options.get("service", "web"), options.get("verbose", False)
         if init:
             init_releases(row, service)
         elif revert:
             revert_releases(row, service)
+        elif rollback is not None:
+            Rollback(row, rollback or None, force, service, verbose).execute()
         elif releases.enabled(row):
             ReleaseDeployment(row, assets=assets, maintenance=maintenance, **options).execute()
         elif assets or not maintenance:
@@ -729,8 +807,10 @@ def main():
     origin = d.add_mutually_exclusive_group()
     origin.add_argument("--from", dest="source", metavar="DIR", help="directorio con el código ya subido")
     origin.add_argument("--ref", help="rama, etiqueta o commit (checkout en app/ o mirror repo.git con releases)")
+    origin.add_argument("--rollback", nargs="?", const="", metavar="RELEASE", help="volver al release anterior o al indicado")
     origin.add_argument("--init-releases", action="store_true", help="convertir el sitio a releases atómicos")
     origin.add_argument("--revert-releases", action="store_true", help="volver a app/ como directorio")
+    d.add_argument("--force", action="store_true", help="con --rollback: aceptar migraciones desconocidas (solo root)")
     d.add_argument("--assets", action="store_true", help="con releases: npm ci && npm run build en el release")
     d.add_argument("--no-maintenance", action="store_true",
                    help="con releases: sin artisan down (migraciones compatibles con el código en línea)")
@@ -748,7 +828,7 @@ def main():
     os.umask(0o022)
     row = site(args.domain)
     if args.action == "deploy":
-        deploy(row, init=args.init_releases, revert=args.revert_releases,
+        deploy(row, rollback=args.rollback, init=args.init_releases, revert=args.revert_releases, force=args.force,
                assets=args.assets, maintenance=not args.no_maintenance, source=args.source, ref=args.ref, backup=not args.skip_backup,
                migrate=not args.no_migrate, composer=not args.no_composer, service=args.service, verbose=args.verbose)
     elif args.action == "build":

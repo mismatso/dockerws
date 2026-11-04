@@ -84,6 +84,6 @@ Si hoy despliegas con `rsync --rsync-path="sudo rsync"` y `sudo` sin contraseña
 3. Prueba un despliegue completo.
 4. Retira la regla `NOPASSWD` amplia del administrador en `/etc/sudoers.d/`.
 
-### Releases atómicos
+### Releases atómicos y `--rollback`
 
-Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). Opciones nuevas en `config/defaults.json`: `keep_releases` (5) y `node_image`. En un sitio con releases, `site-composer` solo admite subcomandos de consulta.
+Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). Opciones nuevas en `config/defaults.json`: `keep_releases` (5), `deploy_user_rollback` (`true`: el usuario de despliegue puede usar `--rollback` sin `--force`) y `node_image`. En un sitio con releases, `site-composer` solo admite subcomandos de consulta.
