@@ -22,6 +22,12 @@ case "$command" in
     networks) networks ;;
     proxy-up)
         require_root
+        recreate=no
+        case "${2:-}" in
+            '') ;;
+            --recreate) recreate=yes ;;
+            *) echo 'Uso: stack.sh proxy-up [--recreate]' >&2; exit 1 ;;
+        esac
         exec 9>/run/lock/dockerws-proxy.lock
         flock -w 120 9
         networks
@@ -29,7 +35,20 @@ case "$command" in
         python3 "$DOCKERWS_ROOT/scripts/render-compose.py"
         python3 "$DOCKERWS_ROOT/scripts/render-proxy.py"
         proxy_compose config --quiet
-        proxy_compose up -d --wait
+        container="$(proxy_compose ps -q proxy)"
+        if [[ $recreate == no && -n $container && $(docker inspect -f '{{.State.Running}}' "$container") == true ]]; then
+            # Proxy en ejecución: conectar las redes nuevas sin recrearlo, para no cortar a los demás sitios.
+            # docker network connect es persistente: sobrevive a reinicios del contenedor y del host.
+            current="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$container")"
+            actions="$(python3 "$DOCKERWS_ROOT/scripts/proxy_networks.py" <<< "$current")"
+            while read -r action network; do
+                [[ -n $action ]] || continue
+                echo "Proxy: $action $network"
+                docker network "$action" "$network" "$container"
+            done <<< "$actions"
+        else
+            proxy_compose up -d --wait
+        fi
         proxy_compose exec -T proxy nginx -t
         proxy_compose exec -T proxy nginx -s reload
         ;;
@@ -142,7 +161,7 @@ case "$command" in
         cat <<'EOF'
 Uso: stack.sh COMANDO [ARGUMENTOS]
   list | validate | networks
-  proxy-up                          Regenerar y aplicar la configuración del proxy
+  proxy-up [--recreate]             Regenerar la configuración, conectar redes y recargar Nginx
   site-up DOMINIO [--verbose]       Construir y arrancar un sitio
   site-stop DOMINIO                 Detener todos los servicios del sitio
   db-up DOMINIO                     Arrancar solo la base dedicada

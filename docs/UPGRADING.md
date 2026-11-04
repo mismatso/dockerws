@@ -70,3 +70,7 @@ Nuevo, opcional. No cambia la estructura de los sitios. Si hoy despliegas con un
 
 - El correo es opcional. `issue-cert.sh DOMINIO CORREO [--dry-run]` sigue funcionando igual.
 - Nuevo `issue-cert.sh DOMINIO --check`: valida HTTP-01 de forma local y por el DNS público, sin depender del entorno staging. Consulta las notas de Cloudflare en el README.
+
+### `proxy-up` sin recrear el proxy
+
+Sin acción. El primer `proxy-up` después de actualizar se comporta igual que antes si el proxy no está corriendo. Si ya corre, conecta redes y recarga sin recrearlo. Si cambias `nginx_image` en `config/local.json`, usa `proxy-up --recreate`.
