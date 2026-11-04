@@ -65,3 +65,8 @@ El `env_file` opcional (`required: false`) requiere Docker Compose 2.24 o superi
 ### `deploy.sh`
 
 Nuevo, opcional. No cambia la estructura de los sitios. Si hoy despliegas con un script propio, compáralo con la secuencia de [Desplegar Laravel y PHP](APPLICATIONS.md#desplegar-laravel-y-php) y prueba primero con `--no-migrate`. Si usabas `git checkout` en `app/`, usa `--ref`. Si usabas rsync hacia `app/`, sube a un directorio aparte y usa `--from`.
+
+### `issue-cert.sh`
+
+- El correo es opcional. `issue-cert.sh DOMINIO CORREO [--dry-run]` sigue funcionando igual.
+- Nuevo `issue-cert.sh DOMINIO --check`: valida HTTP-01 de forma local y por el DNS público, sin depender del entorno staging. Consulta las notas de Cloudflare en el README.

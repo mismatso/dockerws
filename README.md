@@ -67,15 +67,25 @@ Requisitos: Debian 13 o 12, acceso root, DNS público del dominio y puertos 80/4
    sudo ./scripts/stack.sh proxy-up
    ```
 
-6. Apunta los registros A y, si aplica, AAAA al servidor. Solicita el certificado:
+6. Apunta los registros A y, si aplica, AAAA al servidor. Comprueba el desafío y solicita el certificado:
 
    ```bash
-   sudo ./scripts/issue-cert.sh example.com admin@example.com --dry-run
-   sudo ./scripts/issue-cert.sh example.com admin@example.com
+   sudo ./scripts/issue-cert.sh example.com --check
+   sudo ./scripts/issue-cert.sh example.com
    sudo certbot renew --dry-run
    ```
 
-   Todos los alias declarados también deben resolver al servidor. El primer comando prueba la emisión sin guardar un certificado de producción. Antes de tener certificado, el sitio devuelve HTTP 503 excepto en el desafío ACME. Después redirige HTTP a HTTPS. El timer de Certbot renueva y su deploy-hook valida y recarga Nginx automáticamente.
+   Todos los alias declarados también deben resolver al servidor. `--check` publica un token temporal en el webroot de ACME y lo pide para el dominio y cada alias, de dos formas: al proxy local y por el DNS público, siguiendo redirecciones como lo hace Let's Encrypt. Después lo borra. No contacta a Let's Encrypt, así que no depende del entorno staging ni consume límites. `--dry-run` sigue disponible y usa staging.
+
+   El correo es opcional (`issue-cert.sh example.com admin@example.com`). Let's Encrypt ya no envía avisos de vencimiento, y con una cuenta ya registrada en el servidor el correo no se usa. Antes de tener certificado, el sitio devuelve HTTP 503, excepto en el desafío ACME. Después redirige HTTP a HTTPS. El timer de Certbot renueva y su deploy-hook valida y recarga Nginx.
+
+   **Con Cloudflare (proxy activado, nube naranja):**
+
+   - El origen no tiene TLS hasta emitir el primer certificado. Si Cloudflare intenta HTTPS hacia el origen, el visitante ve **525** en lugar del 503. Emite primero con el registro en gris (solo DNS) o confirma con `--check` que el desafío pasa a través de Cloudflare.
+   - **«Always Use HTTPS»** y las reglas de redirección a HTTPS envían el desafío a `https://` y producen 525. Desactívalas para el primer certificado o excluye `/.well-known/acme-challenge/*`. Lo mismo con reglas de WAF, Bot Fight Mode o desafíos que afecten esa ruta. `--check` detecta Cloudflare en la respuesta y lo indica.
+   - Con certificado emitido, usa el modo SSL **Full (strict)**. «Flexible» genera bucles de redirección; «Full» sin `strict` no valida el certificado del origen.
+   - Las renovaciones pasan por HTTP-01 igual que la primera emisión: mantén la excepción para `/.well-known/acme-challenge/`.
+   - Para registrar la IP real del visitante, agrega un archivo manual, por ejemplo `proxy/conf.d/05-cloudflare-realip.conf`, con `set_real_ip_from` para cada [rango de Cloudflare](https://www.cloudflare.com/ips/) y `real_ip_header CF-Connecting-IP;`. El generador conserva los archivos que no creó.
 
 7. Genera y verifica un primer respaldo:
 
