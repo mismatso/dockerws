@@ -11,8 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-PROJECT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT / "scripts"))
+from support import SiteTestCase, PROJECT  # noqa: F401
 import registry
 import scaffold
 import database
@@ -20,30 +19,7 @@ import backups
 import provision_host_db
 
 
-class ProjectTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        for name in ("config", "templates", "images", "proxy", "scripts"):
-            shutil.copytree(PROJECT / name, self.root / name, ignore=shutil.ignore_patterns("__pycache__", "compose.generated.yaml", "local.json"))
-        (self.root / "sites").mkdir()
-        self.patches = [patch.object(module, "ROOT", self.root) for module in (registry, scaffold, database, backups, provision_host_db)]
-        for item in self.patches:
-            item.start()
-
-    def tearDown(self):
-        for item in reversed(self.patches):
-            item.stop()
-        self.tmp.cleanup()
-
-    def create(self, domain="example.test", kind="php", engine="none", mode=None):
-        args = ["--domain", domain, "--type", kind, "--database", engine]
-        if mode:
-            args += ["--db-mode", mode]
-        with patch("builtins.print"):
-            scaffold.scaffold(scaffold.parser().parse_args(args))
-        return registry.site(domain)
-
+class ProjectTests(SiteTestCase):
     def test_supported_matrix_valid_compose(self):
         combos = [("static", "none", "none")]
         for kind in ("php", "laravel"):
