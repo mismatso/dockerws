@@ -36,6 +36,8 @@ case "$command" in
     site-up)
         require_root
         domain="${2:?Falta dominio}"
+        build_args=()
+        [[ ${3:-} != --verbose ]] || build_args+=(--verbose)
         kind="$(site_field "$domain" kind)"
         mode="$(site_field "$domain" database.mode)"
         app="$DOCKERWS_ROOT/sites/$domain/app"
@@ -48,7 +50,14 @@ case "$command" in
         esac
         networks
         site_compose "$domain" config --quiet
-        site_compose "$domain" up -d --build --wait
+        # La salida del build solo se muestra si falla (o con --verbose).
+        python3 "$DOCKERWS_ROOT/scripts/deploy.py" build "$domain" "${build_args[@]}"
+        site_compose "$domain" up -d --no-build --quiet-pull --wait
+        ;;
+    db-import)
+        require_root
+        shift
+        exec python3 "$DOCKERWS_ROOT/scripts/backups.py" import "$@"
         ;;
     db-up)
         domain="${2:?Falta dominio}"
@@ -116,9 +125,10 @@ case "$command" in
 Uso: stack.sh COMANDO [ARGUMENTOS]
   list | validate | networks
   proxy-up                          Regenerar y aplicar la configuración del proxy
-  site-up DOMINIO                   Construir y arrancar un sitio
+  site-up DOMINIO [--verbose]       Construir y arrancar un sitio
   site-stop DOMINIO                 Detener todos los servicios del sitio
   db-up DOMINIO                     Arrancar solo la base dedicada
+  db-import DOMINIO ARCHIVO.sql[.gz] --confirm-overwrite
   site-composer DOMINIO [--service S] [SUBCOMANDO OPCIONES...]
   scheduler-enable DOMINIO [--cron-file /etc/cron.d/X] [--memory 256m] [--service web]
   scheduler-disable DOMINIO

@@ -80,7 +80,8 @@ Requisitos: Debian 13 o 12, acceso root, DNS público del dominio y puertos 80/4
 7. Genera y verifica un primer respaldo:
 
    ```bash
-   sudo ./scripts/backup.sh
+   sudo ./scripts/backup.sh                    # Todos los sitios con BD
+   sudo ./scripts/backup.sh example.com        # Solo un sitio
    ```
 
    El cron lo ejecuta diariamente a las 02:15, hora del servidor. Conserva 30 días en `/var/backups/dockerws`, con directorios `0700` y archivos `0600`. Consulta [respaldos y restauración](docs/BACKUPS.md).
@@ -143,11 +144,12 @@ sudo ./scripts/stack.sh status                      # Código 1 si algún servic
 sudo ./scripts/stack.sh site-composer app.example.com
 sudo ./scripts/stack.sh scheduler-enable app.example.com
 sudo ./scripts/stack.sh db-up example.com
+sudo ./scripts/stack.sh db-import example.com dump.sql.gz --confirm-overwrite
 sudo ./scripts/stack.sh site-stop example.com
 sudo ./scripts/stack.sh proxy logs --tail=100
 ```
 
-`site-stop` detiene también la base dedicada y el scheduler. Para mantenimiento de la aplicación manteniendo la base encendida: `stack.sh site example.com stop web`.
+`site-up` muestra la salida de la construcción de la imagen solo si falla; usa `site-up DOMINIO --verbose` para verla siempre. `site-stop` detiene también la base dedicada y el scheduler. Para mantenimiento de la aplicación manteniendo la base encendida: `stack.sh site example.com stop web`.
 
 Los límites de memoria son topes, no reservas: web 512 MiB, BD dedicada 768 MiB, proxy 256 MiB. Debes ajustarlos al tráfico, consultas y memoria real; no equivalen a un dimensionamiento garantizado. Una instancia de BD compartida reduce la memoria base de múltiples procesos, aunque su caída afecta a todos sus sitios.
 

@@ -49,3 +49,9 @@ MAILTO=root
 ```
 
 Recibirás el aviso solo si el host tiene un MTA configurado.
+
+### `db-import`, respaldo por sitio y `site-up` silencioso
+
+- `stack.sh db-import SITIO archivo.sql[.gz] --confirm-overwrite` reemplaza el `sudo mysql BASE < archivo` manual en la modalidad `host`, y funciona igual en `container`. Ver [respaldos](BACKUPS.md#importar-un-dump-externo).
+- `backup.sh SITIO` ya existía; ahora está documentado en el README.
+- `site-up` oculta la salida de la construcción si no hay errores (`--verbose` para verla siempre).
