@@ -103,3 +103,13 @@ grep -rlE '<\?($|[[:space:]])' --include='*.php' /opt/dockerws/sites/app.example
 ```
 
 Si una aplicación antigua las necesita, agrega `short_open_tag=On` a `images/php-apache/php.ini`. Ese cambio afecta a todos los sitios.
+
+### `HOME` en `stack.sh site … exec` y `run`
+
+`stack.sh site SITIO exec|run …` pasa `-e HOME=/tmp`. El sistema de archivos del contenedor es de solo lectura, y herramientas como `artisan tinker` necesitan un `HOME` escribible:
+
+```bash
+sudo ./scripts/stack.sh site app.example.com exec web php artisan tinker
+```
+
+Para usar otro valor, pasa `-e HOME=…` después; Docker usa el último.
