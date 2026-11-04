@@ -12,11 +12,12 @@
 - Overlays `compose.d/` para adoptar mejoras sin reescribir `compose.yaml`.
 - Laravel: `site-composer` sin capabilities, scheduler como servicio, `deploy.sh` con respaldo previo y ganchos, `app.env` y `env-reload`.
 - Usuario de despliegue con sudo limitado a `deploy.sh`.
+- Estructura de releases atómicos (`deploy.sh --init-releases` y `--revert-releases`) con `storage/` compartido.
 - `issue-cert.sh --check` (HTTP-01 sin staging) y correo opcional; `proxy-up` sin recrear el proxy; `db-import`; `stack.sh status`.
 
 ## Próximas mejoras
 
-1. Despliegues atómicos: `releases/FECHA`, `app` como enlace al release activo, `storage/` compartido mediante un overlay y `deploy.sh --rollback`.
+1. Despliegue con releases: construir con el sitio en línea, migrar antes de activar, retención y `deploy.sh --rollback` con comprobación de migraciones.
 2. Workers de colas (`queue:work`) con el mismo patrón que el scheduler (`workers.py`), `queue:restart` en el despliegue, Redis y cron de WordPress.
 3. Copias remotas cifradas, retención externa y alertas verificables.
 4. Flujo explícito de rotación de credenciales y eliminación de un sitio con salvaguardas.

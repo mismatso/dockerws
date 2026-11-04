@@ -83,3 +83,7 @@ Si hoy despliegas con `rsync --rsync-path="sudo rsync"` y `sudo` sin contraseña
 2. Cambia tu script o CI: rsync hacia `/srv/dockerws/incoming/SITIO/` como `deploy`, y luego `ssh deploy@servidor sudo /opt/dockerws/scripts/deploy.sh SITIO`.
 3. Prueba un despliegue completo.
 4. Retira la regla `NOPASSWD` amplia del administrador en `/etc/sudoers.d/`.
+
+### Releases atómicos
+
+Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). En un sitio con releases, `site-composer` solo admite subcomandos de consulta.

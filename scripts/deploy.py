@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tareas de aplicación: composer y despliegue. Se invoca como root desde stack.sh y deploy.sh."""
 import argparse
+import datetime as dt
 import fcntl
+import json
 import os
 import stat
 import subprocess
@@ -9,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 from registry import ROOT, compose_args, settings, site
+import releases
 
 COMPOSER_CACHE = Path("/var/cache/dockerws/composer")
 # Subcomandos que escriben vendor/ o composer.lock: corren como root con app/ escribible.
@@ -40,7 +43,9 @@ def build_quiet(row, verbose=False):
 
 def app_dir(row):
     path = ROOT / "sites" / row["domain"] / "app"
-    if path.is_symlink() or not path.is_dir():
+    if path.is_symlink():
+        raise ValueError("app/ apunta a un release, que no se modifica en su lugar; usa deploy.sh")
+    if not path.is_dir():
         raise ValueError(f"{path} no es un directorio")
     return path
 
@@ -104,8 +109,9 @@ def apply(row, steps):
 def composer(row, args, service="web", verbose=False):
     build_quiet(row, verbose)
     # post-autoload-dump de Laravel borra bootstrap/cache/config.php: se regenera si existía.
-    cached = row["kind"] == "laravel" and (app_dir(row) / "bootstrap/cache/config.php").exists()
     steps = composer_plan(row, args, service)
+    cached = row["kind"] == "laravel" and not releases.enabled(row) and \
+        (app_dir(row) / "bootstrap/cache/config.php").exists()
     apply(row, steps)
     if cached and steps[-1][1][-3:-1] == ["run-script", "post-autoload-dump"]:
         run(compose_args(row) + ["run", "--rm", "--no-deps", "--user", "33:33", service, "php", "artisan", "optimize"])
@@ -221,11 +227,14 @@ def resolve_ref(row, ref):
     raise DeployError(f"No existe la referencia {ref}")
 
 
-def link_public_storage(row):
-    """storage:link no puede escribir en el código montado de solo lectura: se crea desde el host."""
-    app = app_dir(row)
+def link_public_storage(row, folder=None, storage=None):
+    """storage:link no puede escribir en el código montado de solo lectura: se crea desde el host.
+
+    Con releases, el release tiene storage/ vacío (punto de montaje) y el destino real es shared/storage."""
+    app = Path(folder) if folder else app_dir(row)
+    storage = Path(storage) if storage else app / "storage"
     link, target = app / "public/storage", "../storage/app/public"
-    if (app / "storage/app/public").is_dir() and (app / "public").is_dir() and not link.exists() and not link.is_symlink():
+    if (storage / "app/public").is_dir() and (app / "public").is_dir() and not link.exists() and not link.is_symlink():
         link.symlink_to(target)
 
 
@@ -363,9 +372,115 @@ class Deployment:
         print(f"Despliegue terminado: {self.row['domain']}")
 
 
-def deploy(row, **options):
+# --- Releases atómicos ----------------------------------------------------------------------
+
+def history(row, text):
+    """Registro de activaciones, con quién las hizo."""
+    who = os.environ.get("SUDO_USER") or "root"
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with (releases.releases_dir(row) / "history.log").open("a") as log:
+        log.write(f"{stamp} {who} {text}\n")
+
+
+def recreate(row, service, running):
+    run(compose_args(row) + ["up", "-d", "--no-build", "--force-recreate", "--wait",
+                             *services_to_recreate(app_services(row), running, service)])
+
+
+def init_releases(row, service="web"):
+    """Convierte app/ en releases/FECHA + enlace app, y storage/ en shared/storage. Reversible."""
+    import workers
+    if row["kind"] not in EXCLUDES:
+        raise DeployError("Los releases admiten sitios laravel y php")
+    site_path = ROOT / "sites" / row["domain"]
+    app, rel_root, shared = site_path / "app", site_path / "releases", site_path / "shared"
+    if releases.enabled(row):
+        raise DeployError("El sitio ya usa releases")
+    if app.is_symlink() or not app.is_dir():
+        raise DeployError("app/ debe ser un directorio")
+    if (rel_root.exists() and any(rel_root.iterdir())) or (shared / "storage").exists():
+        raise DeployError("Ya existen releases/ o shared/storage; revísalos antes de inicializar")
+    laravel = row["kind"] == "laravel"
+    config = workers.resolved(row)  # Antes de mover nada: rutas de app/storage aún válidas.
+    deployment = Deployment(row, service=service)
+    deployment.step("Inicializando releases")
+    undo = []
+    try:
+        deployment.enter_maintenance()
+        rel_root.mkdir(mode=0o755, exist_ok=True)
+        name = releases.new_name(row)
+        release = rel_root / name
+        os.rename(app, release)
+        undo.append(lambda: os.rename(release, app))
+        if laravel:
+            shared.mkdir(mode=0o755, exist_ok=True)
+            os.rename(release / "storage", shared / "storage")
+            undo.append(lambda: os.rename(shared / "storage", release / "storage"))
+            (release / "storage").mkdir(mode=0o755)
+            undo.append(lambda: (release / "storage").rmdir())
+            link_public_storage(row, release, shared / "storage")
+        releases.switch(row, name)
+        undo.append(lambda: (site_path / "app").unlink())
+        if laravel:
+            overlay = releases.storage_overlay(config, row)
+            if overlay:
+                target = site_path / "compose.d" / releases.OVERLAY
+                workers.write_overlay(target, json.dumps(overlay, indent=2) + "\n")
+                undo.append(lambda: target.unlink())
+            releases.rewrite_worker_storage(row, releases.APP_STORAGE, releases.SHARED_STORAGE)
+            undo.append(lambda: releases.rewrite_worker_storage(row, releases.SHARED_STORAGE, releases.APP_STORAGE))
+        releases.write_meta(release, {"name": name, "initial": True, "previous": None,
+                                      "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                                      "migrations": releases.migration_files(release)})
+        deployment.step("Recreando servicios con el release inicial")
+        recreate(row, service, deployment.running)
+        deployment.leave_maintenance()
+    except BaseException:
+        for action in reversed(undo):
+            try:
+                action()
+            except OSError as exc:
+                print(f"No se pudo deshacer un paso: {exc}", file=sys.stderr)
+        print("Inicialización cancelada; se restituyó app/. Si el sitio quedó en mantenimiento: "
+              f"stack.sh site {row['domain']} exec {service} php artisan up", file=sys.stderr)
+        raise
+    history(row, f"init {name}")
+    print(f"Releases inicializados: app -> releases/{name}")
+
+
+def revert_releases(row, service="web"):
+    """Vuelve a la estructura anterior: el release activo pasa a ser app/ y shared/storage, app/storage."""
+    site_path = ROOT / "sites" / row["domain"]
+    active = releases.current(row)
+    release = releases.path(row, active)
+    laravel = row["kind"] == "laravel"
+    if laravel and any((release / "storage").iterdir()):
+        raise DeployError(f"releases/{active}/storage no está vacío; revísalo antes de revertir")
+    deployment = Deployment(row, service=service)
+    deployment.step(f"Revirtiendo releases (activo: {active})")
+    deployment.enter_maintenance()
+    overlay = site_path / "compose.d" / releases.OVERLAY
+    if laravel:
+        overlay.unlink(missing_ok=True)
+        releases.rewrite_worker_storage(row, releases.SHARED_STORAGE, releases.APP_STORAGE)
+    (site_path / "app").unlink()
+    os.rename(release, site_path / "app")
+    if laravel:
+        (site_path / "app/storage").rmdir()
+        os.rename(site_path / "shared/storage", site_path / "app/storage")
+    (site_path / "app" / releases.META).unlink(missing_ok=True)
+    deployment.step("Recreando servicios")
+    recreate(row, service, deployment.running)
+    deployment.leave_maintenance()
+    print(f"app/ vuelve a ser un directorio. Los demás releases siguen en {site_path / 'releases'}; "
+          "bórralos cuando ya no los necesites.")
+
+
+def deploy(row, init=False, revert=False, **options):
     uid = sudo_uid()
     if uid is not None:
+        if init or revert:
+            raise DeployError("--init-releases y --revert-releases solo están permitidos para root")
         options["source"] = restrict_for_sudo(row, uid, options.get("source"), options.get("ref"),
                                               options.get("backup", True))
     lock_path = ROOT / "sites" / row["domain"] / ".deploy.lock"
@@ -374,7 +489,15 @@ def deploy(row, **options):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise DeployError("Ya hay un despliegue en curso para este sitio")
-        Deployment(row, **options).execute()
+        service = options.get("service", "web")
+        if init:
+            init_releases(row, service)
+        elif revert:
+            revert_releases(row, service)
+        elif releases.enabled(row):
+            raise DeployError("Esta versión todavía no despliega sitios con releases; usa --revert-releases")
+        else:
+            Deployment(row, **options).execute()
 
 
 def main():
@@ -390,6 +513,8 @@ def main():
     origin = d.add_mutually_exclusive_group()
     origin.add_argument("--from", dest="source", metavar="DIR", help="directorio con el código ya subido")
     origin.add_argument("--ref", help="rama, etiqueta o commit del checkout git en app/")
+    origin.add_argument("--init-releases", action="store_true", help="convertir el sitio a releases atómicos")
+    origin.add_argument("--revert-releases", action="store_true", help="volver a app/ como directorio")
     d.add_argument("--skip-backup", action="store_true")
     d.add_argument("--no-migrate", action="store_true")
     d.add_argument("--no-composer", action="store_true")
@@ -404,8 +529,9 @@ def main():
     os.umask(0o022)
     row = site(args.domain)
     if args.action == "deploy":
-        deploy(row, source=args.source, ref=args.ref, backup=not args.skip_backup, migrate=not args.no_migrate,
-               composer=not args.no_composer, service=args.service, verbose=args.verbose)
+        deploy(row, init=args.init_releases, revert=args.revert_releases,
+               source=args.source, ref=args.ref, backup=not args.skip_backup,
+               migrate=not args.no_migrate, composer=not args.no_composer, service=args.service, verbose=args.verbose)
     elif args.action == "build":
         build_quiet(row, args.verbose)
     elif args.action == "composer":

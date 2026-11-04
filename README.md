@@ -136,7 +136,9 @@ sites/<dominio>/          Instancias locales generadas, ignoradas por Git
   runtime.env             Credenciales y valores generados (APP_KEY, DB_*)
   app.env                 Variables propias de la aplicación (correo, idioma…)
   secrets/                Credenciales administrativas/inicialización
-  app/                    Código de la aplicación
+  app/                    Código de la aplicación (o enlace a releases/FECHA)
+  releases/               Releases atómicos, cuando el sitio los usa
+  shared/storage/         storage/ de Laravel compartido entre releases
   writable/               Datos escribibles para PHP genérico
   data/sqlite/            Archivo SQLite, cuando corresponde
 tests/                    Pruebas unitarias e integración con Docker

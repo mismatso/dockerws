@@ -172,7 +172,34 @@ El usuario de despliegue no escribe en `sites/`, `app/`, `runtime.env` ni `secre
 
 Límite de confianza: quien despliega decide el código que se ejecuta como UID 33 en el contenedor, y los scripts de composer, que corren en un contenedor temporal como root sin capabilities con `app/` escribible. Es el mismo nivel de confianza de cualquier despliegue, pero ya sin root en el host.
 
-Hoy el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Los despliegues atómicos (`releases/FECHA` con vuelta atrás) están previstos para una próxima versión.
+Hoy el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Los [releases atómicos](#releases-atómicos) preparan la estructura para activar el código nuevo de una vez; `deploy.sh` los desplegará en una próxima versión.
+
+Con sudo no se permiten `--init-releases` ni `--revert-releases`.
+
+### Releases atómicos
+
+Opcional. Cada release es un directorio propio y `app` pasa a ser un enlace al release activo:
+
+```text
+sites/DOMINIO/
+  app -> releases/20261104T063322Z
+  releases/
+    20261104T063055Z/     Release anterior, intacto
+    20261104T063322Z/     Código (root), vendor/, bootstrap/cache (33:33), storage/ vacío
+    history.log           Activaciones, con el usuario que las hizo
+  shared/storage/         storage/ de Laravel, común a todos los releases
+  compose.d/90-releases.yaml
+```
+
+Se activa una vez por sitio, con un mantenimiento breve:
+
+```bash
+sudo ./scripts/deploy.sh app.example.com --init-releases
+```
+
+Mueve `app/` a `releases/FECHA` y `app/storage` a `shared/storage`, crea el enlace y el overlay `90-releases.yaml` (que monta `shared/storage` en los servicios de `compose.yaml`), actualiza los overlays de workers de DockerWS (`50-*.yaml`) y recrea los servicios. Si algo falla, deshace cada paso. `--revert-releases` vuelve a la estructura anterior con el release activo; los demás quedan en `releases/` para que los borres a mano.
+
+**Composer:** los releases no se modifican en su lugar. `site-composer` solo admite subcomandos de consulta (`show`, `outdated`, `audit`…).
 
 ## WordPress
 

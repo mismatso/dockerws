@@ -87,3 +87,19 @@ sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.examp
 Si tu proceso actual ejecuta pasos propios (limpiar cachés, publicar assets, notificar), pásalos a `sites/DOMINIO/hooks/pre-deploy` o `post-deploy` (root, `0755`). Para un usuario de despliegue sin `sudo` amplio, sigue [Usuario de despliegue](APPLICATIONS.md#usuario-de-despliegue).
 
 Si tu `compose.yaml` editado a mano define el servicio PHP con otro nombre, usa `--service NOMBRE`. Al final se recrean el servicio web, el scheduler y los servicios que ya estaban corriendo. `db` y los servicios detenidos (por ejemplo, un servicio `base` que solo construye la imagen) no se tocan.
+
+## Releases atómicos
+
+Requiere `deploy.sh` y un sitio Laravel o PHP. Revisa antes:
+
+- que nada fuera de DockerWS escriba en `app/` o `app/storage` (tareas de cron del host, scripts propios): después de la conversión esas rutas cambian a `releases/…` y `shared/storage`;
+- si tu `compose.yaml` monta `app/storage` en algún servicio, `--init-releases` crea `compose.d/90-releases.yaml` para montar `shared/storage` en su lugar. Revísalo con `stack.sh site DOMINIO config`. Los volúmenes que no sean `app/storage` (por ejemplo `./image` o datos propios) no se tocan;
+- que haya un respaldo reciente.
+
+```bash
+sudo ./scripts/backup.sh app.example.com
+sudo ./scripts/deploy.sh app.example.com --init-releases
+sudo ./scripts/stack.sh status app.example.com
+```
+
+Para volver atrás con la estructura anterior: `deploy.sh DOMINIO --revert-releases`.
