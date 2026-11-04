@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from registry import ROOT, settings, sites, validate
+import workers
 
 LOGGING = {"driver": "local", "options": {"max-size": "10m", "max-file": "5"}}
 
@@ -117,6 +118,8 @@ def scaffold(args):
                         "socket_dir": args.socket_dir or ("/var/run/postgresql" if engine == "postgres" else "/run/mysqld"),
                         "socket_name": args.socket_name, "port": args.db_port or (5432 if engine == "postgres" else 3306)}}
     validate(row)
+    if args.scheduler and args.type != "laravel":
+        raise ValueError("--scheduler solo se admite en sitios laravel")
     target = ROOT / "sites" / row["domain"]
     existing = sites()
     names = [row["domain"], *row["aliases"]]
@@ -129,7 +132,12 @@ def scaffold(args):
         for directory in ("app", "secrets", "data", "writable"):
             (staging / directory).mkdir(mode=0o700 if directory == "secrets" else 0o755)
         write(staging / "site.json", json.dumps(row, indent=2) + "\n")
-        write(staging / "compose.yaml", json.dumps(compose(row, cfg), indent=2) + "\n")
+        generated = compose(row, cfg)
+        write(staging / "compose.yaml", json.dumps(generated, indent=2) + "\n")
+        if args.scheduler:
+            service = workers.derive(generated["services"]["web"], generated["name"], "scheduler", cfg)
+            (staging / "compose.d").mkdir(mode=0o755)
+            write(staging / "compose.d/50-scheduler.yaml", workers.overlay(service, "scheduler"))
         write(staging / ".env", "# Reservado para interpolación de Compose. Credenciales en runtime.env.\n")
         password, admin = secrets.token_hex(32), secrets.token_hex(32)
         db = row["database"]
@@ -190,8 +198,9 @@ def scaffold(args):
         raise
     print(f"Creado: {target}\nTipo: {args.type}; base de datos: {engine}/{mode}")
     print("Las credenciales están en runtime.env y secrets/; no se imprimen ni se versionan.")
+    if args.scheduler:
+        print("Scheduler: servicio scheduler en compose.d/50-scheduler.yaml; no hace falta cron en el host.")
     print(f"Siguientes pasos: importar la aplicación; scripts/stack.sh site-up {args.domain}; scripts/stack.sh proxy-up")
-
 
 def parser():
     p = argparse.ArgumentParser(description="Crear un sitio sin iniciar servicios ni descargar aplicaciones")
@@ -205,6 +214,7 @@ def parser():
     p.add_argument("--socket-dir")
     p.add_argument("--socket-name", default="mysqld.sock")
     p.add_argument("--db-port", type=int)
+    p.add_argument("--scheduler", action="store_true", help="Laravel: servicio scheduler con schedule:work")
     return p
 
 

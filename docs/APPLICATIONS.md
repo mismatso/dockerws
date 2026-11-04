@@ -43,7 +43,38 @@ sudo ./scripts/stack.sh site app.example.com exec --user 33:33 web php artisan c
 
 Configura `trustProxies` en `bootstrap/app.php` para aceptar los encabezados `X-Forwarded-*` del proxy. En esta topología el único ingreso web publicado es Nginx; puedes usar `at: '*'` mientras mantengas esa restricción. No añadas puertos públicos al backend. [Proxies en Laravel](https://laravel.com/framework/docs/requests).
 
-La configuración inicial usa sesiones y caché en archivos, y cola `sync`. Workers permanentes, Redis y scheduler son extensiones de la hoja de ruta. Si los agregas, dales el mismo entorno y permisos, y detén todos los escritores al restaurar datos. El enlace `public/storage` debe prepararse durante el despliegue; `storage:link` no puede escribir sobre el código montado RO en ejecución.
+La configuración inicial usa sesiones y caché en archivos, y cola `sync`. Workers de colas y Redis son extensiones de la hoja de ruta. Si los agregas a mano, dales el mismo entorno y permisos, y detén todos los escritores al restaurar datos.
+
+### Scheduler
+
+El scheduler de Laravel corre en un servicio `scheduler` propio con `php artisan schedule:work`. No se necesita un cron en el host. Al crear el sitio:
+
+```bash
+sudo ./scripts/create-site.sh --domain app.example.com --type laravel --database mysql --db-mode host --scheduler
+```
+
+El asistente interactivo también lo pregunta. En un sitio existente:
+
+```bash
+sudo ./scripts/stack.sh scheduler-enable app.example.com
+```
+
+El servicio se escribe en `sites/DOMINIO/compose.d/50-scheduler.yaml`, un overlay que Compose carga después de `compose.yaml`. Se deriva del servicio `web`:
+
+- usa la misma imagen y el mismo `env_file`;
+- corre como UID 33, sin capabilities, con el código de solo lectura y los mismos montajes escribibles;
+- tiene `restart: unless-stopped` y su propio límite de memoria (`scheduler_memory`, 256 MiB por defecto; `--memory` para cambiarlo);
+- no tiene alias de red, puertos ni healthcheck HTTP, así que el proxy nunca le envía tráfico.
+
+`compose.yaml` no se modifica. Si tu servicio PHP tiene otro nombre, usa `--service NOMBRE`.
+
+- `site-stop` también detiene el scheduler, y `site-up` lo arranca.
+- La salida de las tareas queda en `stack.sh site DOMINIO logs scheduler`.
+- `stack.sh status` muestra el estado de todos los servicios y termina con código 1 si alguno no está corriendo. Puedes ejecutarlo desde cron o desde tu monitoreo para enterarte si el scheduler se cae.
+- Las tareas no se ejecutan durante `artisan down`, salvo las marcadas con `evenInMaintenanceMode()`.
+- Para quitarlo: `stack.sh scheduler-disable DOMINIO`.
+
+`scheduler-enable` se niega a continuar si encuentra en `/etc/cron.d/` un cron de `schedule:run` para ese sitio, porque las tareas se ejecutarían dos veces. Para pasar de ese cron al servicio sin perder ni duplicar ejecuciones, consulta la [guía de adopción](ADOPTION.md#scheduler). El enlace `public/storage` debe prepararse durante el despliegue; `storage:link` no puede escribir sobre el código montado RO en ejecución.
 
 ## WordPress
 

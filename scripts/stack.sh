@@ -61,6 +61,44 @@ case "$command" in
         shift
         exec python3 "$DOCKERWS_ROOT/scripts/deploy.py" composer "$@"
         ;;
+    scheduler-enable)
+        require_root
+        domain="${2:?Falta dominio}"
+        shift 2
+        cron_file=''
+        enable_args=()
+        while (( $# )); do
+            case "$1" in
+                --cron-file) cron_file="${2:?Falta archivo}"; enable_args+=("$1" "$2"); shift 2 ;;
+                --memory|--service) enable_args+=("$1" "${2:?Falta valor de $1}"); shift 2 ;;
+                *) echo "Opción desconocida: $1" >&2; exit 1 ;;
+            esac
+        done
+        python3 "$DOCKERWS_ROOT/scripts/workers.py" enable "$domain" scheduler "${enable_args[@]}"
+        trap 'echo "El overlay quedó creado; revisa el error o deshaz con: stack.sh scheduler-disable $domain" >&2' ERR
+        networks
+        site_compose "$domain" config --quiet
+        python3 "$DOCKERWS_ROOT/scripts/deploy.py" build "$domain"
+        if [[ -n $cron_file ]]; then
+            # Crear el contenedor antes del traspaso: en la ventana solo queda arrancarlo.
+            site_compose "$domain" up -d --no-build --no-start scheduler
+            python3 "$DOCKERWS_ROOT/scripts/workers.py" cron-handoff "$domain" "$cron_file"
+        else
+            site_compose "$domain" up -d --no-build --wait scheduler
+        fi
+        trap - ERR
+        site_compose "$domain" ps scheduler
+        ;;
+    scheduler-disable)
+        require_root
+        domain="${2:?Falta dominio}"
+        [[ -f "$DOCKERWS_ROOT/sites/$domain/compose.d/50-scheduler.yaml" ]] || {
+            echo 'Este sitio no tiene compose.d/50-scheduler.yaml; si el scheduler está en compose.yaml, edítalo a mano.' >&2; exit 1; }
+        site_compose "$domain" rm --stop --force scheduler
+        python3 "$DOCKERWS_ROOT/scripts/workers.py" disable "$domain" scheduler
+        echo 'Si la aplicación necesita el scheduler, vuelve a habilitarlo o restituye su cron.'
+        ;;
+    status) python3 "$DOCKERWS_ROOT/scripts/workers.py" status ${2:+"$2"} ;;
     site-stop) site_compose "${2:?Falta dominio}" stop ;;
     site) domain="${2:?Falta dominio}"; shift 2; site_compose "$domain" "$@" ;;
     proxy) shift; proxy_compose "$@" ;;
@@ -82,6 +120,9 @@ Uso: stack.sh COMANDO [ARGUMENTOS]
   site-stop DOMINIO                 Detener todos los servicios del sitio
   db-up DOMINIO                     Arrancar solo la base dedicada
   site-composer DOMINIO [--service S] [SUBCOMANDO OPCIONES...]
+  scheduler-enable DOMINIO [--cron-file /etc/cron.d/X] [--memory 256m] [--service web]
+  scheduler-disable DOMINIO
+  status [DOMINIO]                  Estado de los servicios; código 1 si alguno falla
   site DOMINIO COMANDO...           docker compose del sitio
   proxy COMANDO...                  docker compose del proxy
 EOF

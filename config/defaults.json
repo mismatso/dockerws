@@ -7,6 +7,7 @@
   "nginx_image": "nginx:stable-alpine",
   "web_memory": "512m",
   "db_memory": "768m",
+  "scheduler_memory": "256m",
   "backup_dir": "/var/backups/dockerws",
   "retention_days": 30,
   "backup_timeout": 1800

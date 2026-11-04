@@ -104,7 +104,7 @@ sudo ./scripts/create-site.sh --domain small.example.com --type php --database s
 sudo ./scripts/create-site.sh --domain www.example.com --type static
 ```
 
-Opciones adicionales: `--alias` (repetible), `--id`, `--php`, `--socket-dir`, `--socket-name`, `--db-port`. El modo no interactivo solo genera archivos; usa `provision-host-db.sh` explícitamente si eliges el host. Puedes generar archivos sin root para revisarlos, pero en el servidor debes crearlos con sudo para asignar los permisos de escritura de la aplicación.
+Opciones adicionales: `--alias` (repetible), `--id`, `--php`, `--socket-dir`, `--socket-name`, `--db-port`, y `--scheduler` (solo Laravel: servicio `schedule:work`, sin cron en el host). El modo no interactivo solo genera archivos; usa `provision-host-db.sh` explícitamente si eliges el host. Puedes generar archivos sin root para revisarlos, pero en el servidor debes crearlos con sudo para asignar los permisos de escritura de la aplicación.
 
 Un dominio, alias o ID duplicado produce un error. No se sobrescriben sitios, contraseñas, bases o usuarios existentes. Los ID/nombres SQL se derivan del dominio y son independientes entre sitios.
 
@@ -121,6 +121,7 @@ scripts/                  Asistente, operación, certificados y respaldos
 sites/<dominio>/          Instancias locales generadas, ignoradas por Git
   site.json               Metadatos sin contraseñas
   compose.yaml            Servicios, redes, volúmenes y límites
+  compose.d/*.yaml        Overlays opcionales (scheduler, etc.); se cargan después
   runtime.env             Variables privadas de aplicación
   secrets/                Credenciales administrativas/inicialización
   app/                    Código de la aplicación
@@ -129,7 +130,7 @@ sites/<dominio>/          Instancias locales generadas, ignoradas por Git
 tests/                    Pruebas unitarias e integración con Docker
 ```
 
-No editar a mano `site.json` para cambiar el motor, dominio o modalidad de un sitio existente: esas operaciones requieren una migración de datos. `compose.yaml` puede adaptarse después de crearlo; el generador nunca lo reescribe. `config/local.json` solo afecta sitios nuevos (excepto opciones operativas como respaldos y la imagen del proxy).
+No editar a mano `site.json` para cambiar el motor, dominio o modalidad de un sitio existente: esas operaciones requieren una migración de datos. `compose.yaml` puede adaptarse después de crearlo; el generador nunca lo reescribe. Las mejoras posteriores se agregan como overlays en `compose.d/`; ver [adopción en sitios existentes](docs/ADOPTION.md) y [notas de actualización](docs/UPGRADING.md). `config/local.json` solo afecta sitios nuevos (excepto opciones operativas como respaldos y la imagen del proxy).
 
 ## Operación
 
@@ -138,13 +139,15 @@ sudo ./scripts/stack.sh list
 sudo ./scripts/stack.sh validate
 sudo ./scripts/stack.sh site example.com logs --tail=100
 sudo ./scripts/stack.sh site example.com exec --user 33:33 web php -v
+sudo ./scripts/stack.sh status                      # Código 1 si algún servicio no corre
 sudo ./scripts/stack.sh site-composer app.example.com
+sudo ./scripts/stack.sh scheduler-enable app.example.com
 sudo ./scripts/stack.sh db-up example.com
 sudo ./scripts/stack.sh site-stop example.com
 sudo ./scripts/stack.sh proxy logs --tail=100
 ```
 
-`site-stop` detiene también la base dedicada. Para mantenimiento de la aplicación manteniendo la base encendida: `stack.sh site example.com stop web`.
+`site-stop` detiene también la base dedicada y el scheduler. Para mantenimiento de la aplicación manteniendo la base encendida: `stack.sh site example.com stop web`.
 
 Los límites de memoria son topes, no reservas: web 512 MiB, BD dedicada 768 MiB, proxy 256 MiB. Debes ajustarlos al tráfico, consultas y memoria real; no equivalen a un dimensionamiento garantizado. Una instancia de BD compartida reduce la memoria base de múltiples procesos, aunque su caída afecta a todos sus sitios.
 

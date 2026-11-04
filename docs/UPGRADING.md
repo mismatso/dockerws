@@ -1,0 +1,51 @@
+# Notas de actualización
+
+Para un servidor que ya tiene sitios creados con versiones anteriores. Ningún paso es obligatorio: los sitios existentes siguen funcionando sin cambios después de `git pull`. Cada mejora se adopta por separado; los detalles están en la [guía de adopción](ADOPTION.md).
+
+## Procedimiento general
+
+```bash
+cd /opt/dockerws
+sudo git pull
+sudo bash tests/check.sh          # Opcional: no arranca contenedores ni toca sitios
+sudo ./scripts/stack.sh validate
+sudo ./scripts/stack.sh status
+```
+
+`validate` carga ahora también los overlays de `compose.d/`. Si no tienes ninguno, el resultado es el mismo que antes.
+
+## Cambios de esta versión
+
+### Overlays `compose.d/`
+
+Nuevo mecanismo para agregar servicios o montajes sin editar `compose.yaml`. No requiere acción.
+
+### `stack.sh site-composer`
+
+Reemplaza el `composer install` como root documentado antes, que fallaba en sitios Laravel nuevos. Si tienes scripts propios con ese `run --rm --user 0:0 … composer install`, cámbialos por:
+
+```bash
+sudo ./scripts/stack.sh site-composer app.example.com
+```
+
+### Scheduler de Laravel sin cron del host
+
+Por cada sitio Laravel con un archivo `/etc/cron.d/SITIO`:
+
+```bash
+sudo ./scripts/stack.sh scheduler-enable app.example.com --cron-file /etc/cron.d/SITIO
+sudo ./scripts/stack.sh site app.example.com logs --since 3m scheduler
+```
+
+El traspaso se hace dentro de un mismo minuto, sin perder ni duplicar ejecuciones; ver [Adopción › Scheduler](ADOPTION.md#scheduler). Haz los sitios de uno en uno y revisa los logs del siguiente minuto antes de seguir.
+
+### `stack.sh status`
+
+Nuevo. Puedes agregar un cron de monitoreo, por ejemplo en `/etc/cron.d/dockerws-status`:
+
+```cron
+MAILTO=root
+*/5 * * * * root out="$(/opt/dockerws/scripts/stack.sh status 2>&1)" || echo "$out" | grep -v '^OK'
+```
+
+Recibirás el aviso solo si el host tiene un MTA configurado.
