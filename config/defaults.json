@@ -10,5 +10,6 @@
   "scheduler_memory": "256m",
   "backup_dir": "/var/backups/dockerws",
   "retention_days": 30,
-  "backup_timeout": 1800
+  "backup_timeout": 1800,
+  "deploy_incoming_dir": "/srv/dockerws/incoming"
 }

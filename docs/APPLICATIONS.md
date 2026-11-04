@@ -139,6 +139,39 @@ Lo que se conserva entre despliegues:
 docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/app" -w /app node:22-bookworm-slim sh -c 'npm ci && npm run build'
 ```
 
+### Usuario de despliegue
+
+Para no dar `sudo` sin contraseña al administrador (por ejemplo, el antiguo `rsync --rsync-path="sudo rsync"`), crea un usuario dedicado:
+
+```bash
+sudo adduser --disabled-password deploy          # Agrega su llave pública a ~deploy/.ssh/authorized_keys
+sudo ./host/install-deploy-user.sh deploy app.example.com
+```
+
+El instalador:
+
+- crea `/srv/dockerws/incoming/DOMINIO`, propiedad de `deploy` (`0750`), dentro de una base de root (`0755`). La ruta base se configura con `deploy_incoming_dir`;
+- instala `/etc/sudoers.d/dockerws-deploy-deploy`, validado con `visudo`, que solo permite `deploy.sh DOMINIO [opciones]` para los sitios indicados;
+- se niega si el checkout, `scripts/` o `deploy.sh`/`deploy.py` no son de root o son escribibles por otros. Si `deploy` pudiera modificarlos, la regla de sudo sería un root completo.
+
+Desde CI o la máquina de desarrollo:
+
+```bash
+rsync -az --delete --exclude .git --exclude node_modules ./ deploy@servidor:/srv/dockerws/incoming/app.example.com/
+ssh deploy@servidor sudo /opt/dockerws/scripts/deploy.sh app.example.com
+```
+
+Cuando `deploy.sh` se invoca con sudo desde un usuario que no es root:
+
+- el único origen admitido es su carpeta de subida (`--from` se puede omitir);
+- `--ref` sigue disponible;
+- `--skip-backup` se rechaza;
+- la carpeta debe pertenecer a ese usuario y la base a root, sin enlaces simbólicos.
+
+El usuario de despliegue no escribe en `sites/`, `app/`, `runtime.env` ni `secrets/`. El código se copia a `app/` como root:root y sigue de solo lectura en el contenedor. Los ganchos solo se toman de `sites/DOMINIO/hooks/` (de root).
+
+Límite de confianza: quien despliega decide el código que se ejecuta como UID 33 en el contenedor, y los scripts de composer, que corren en un contenedor temporal como root sin capabilities con `app/` escribible. Es el mismo nivel de confianza de cualquier despliegue, pero ya sin root en el host.
+
 Hoy el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Los despliegues atómicos (`releases/FECHA` con vuelta atrás) están previstos para una próxima versión.
 
 ## WordPress

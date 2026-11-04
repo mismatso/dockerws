@@ -64,7 +64,7 @@ El `env_file` opcional (`required: false`) requiere Docker Compose 2.24 o superi
 
 ### `deploy.sh`
 
-Nuevo, opcional. No cambia la estructura de los sitios. Si hoy despliegas con un script propio, compáralo con la secuencia de [Desplegar Laravel y PHP](APPLICATIONS.md#desplegar-laravel-y-php) y prueba primero con `--no-migrate`. Si usabas `git checkout` en `app/`, usa `--ref`. Si usabas rsync hacia `app/`, sube a un directorio aparte y usa `--from`.
+Nuevo, opcional. No cambia la estructura de los sitios. Si hoy despliegas con un script propio, compáralo con la secuencia de [Desplegar Laravel y PHP](APPLICATIONS.md#desplegar-laravel-y-php) y prueba primero con `--no-migrate`. Si usabas `git checkout` en `app/`, usa `--ref`. Si usabas rsync hacia `app/`, sube a un directorio aparte y usa `--from` (ver [permisos de despliegue](#usuario-de-despliegue-sin-sudo-amplio)).
 
 ### `issue-cert.sh`
 
@@ -74,3 +74,12 @@ Nuevo, opcional. No cambia la estructura de los sitios. Si hoy despliegas con un
 ### `proxy-up` sin recrear el proxy
 
 Sin acción. El primer `proxy-up` después de actualizar se comporta igual que antes si el proxy no está corriendo. Si ya corre, conecta redes y recarga sin recrearlo. Si cambias `nginx_image` en `config/local.json`, usa `proxy-up --recreate`.
+
+### Usuario de despliegue sin sudo amplio
+
+Si hoy despliegas con `rsync --rsync-path="sudo rsync"` y `sudo` sin contraseña para el administrador:
+
+1. `sudo ./host/install-deploy-user.sh deploy SITIO [SITIO…]` (ver [Usuario de despliegue](APPLICATIONS.md#usuario-de-despliegue)).
+2. Cambia tu script o CI: rsync hacia `/srv/dockerws/incoming/SITIO/` como `deploy`, y luego `ssh deploy@servidor sudo /opt/dockerws/scripts/deploy.sh SITIO`.
+3. Prueba un despliegue completo.
+4. Retira la regla `NOPASSWD` amplia del administrador en `/etc/sudoers.d/`.

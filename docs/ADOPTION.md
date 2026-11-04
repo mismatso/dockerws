@@ -84,6 +84,6 @@ Antes de mover, guarda una copia `runtime.env.FECHA.bak` (`0600`). Se niega a mo
 sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.example.com --no-migrate
 ```
 
-Si tu proceso actual ejecuta pasos propios (limpiar cachés, publicar assets, notificar), pásalos a `sites/DOMINIO/hooks/pre-deploy` o `post-deploy` (root, `0755`).
+Si tu proceso actual ejecuta pasos propios (limpiar cachés, publicar assets, notificar), pásalos a `sites/DOMINIO/hooks/pre-deploy` o `post-deploy` (root, `0755`). Para un usuario de despliegue sin `sudo` amplio, sigue [Usuario de despliegue](APPLICATIONS.md#usuario-de-despliegue).
 
 Si tu `compose.yaml` editado a mano define el servicio PHP con otro nombre, usa `--service NOMBRE`. Al final se recrean el servicio web, el scheduler y los servicios que ya estaban corriendo. `db` y los servicios detenidos (por ejemplo, un servicio `base` que solo construye la imagen) no se tocan.

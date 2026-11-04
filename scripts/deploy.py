@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from registry import ROOT, compose_args, site
+from registry import ROOT, compose_args, settings, site
 
 COMPOSER_CACHE = Path("/var/cache/dockerws/composer")
 # Subcomandos que escriben vendor/ o composer.lock: corren como root con app/ escribible.
@@ -229,6 +229,38 @@ def link_public_storage(row):
         link.symlink_to(target)
 
 
+def sudo_uid():
+    """UID de quien invocó con sudo, o None si es root directamente."""
+    uid = os.environ.get("SUDO_UID", "")
+    return int(uid) if uid.isdigit() and int(uid) != 0 else None
+
+
+def incoming_dir(row, uid, root_uid=0):
+    """Directorio de subida del usuario de despliegue: base de root y carpeta del sitio propia del usuario."""
+    base = Path(settings()["deploy_incoming_dir"])
+    folder = base / row["domain"]
+    for item, owner in ((base, root_uid), (folder, uid)):
+        try:
+            info = item.lstat()
+        except FileNotFoundError:
+            raise DeployError(f"No existe {item}; ejecuta host/install-deploy-user.sh") from None
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != owner:
+            raise DeployError(f"{item} debe ser un directorio (sin enlaces) de UID {owner}")
+        if owner == root_uid and info.st_mode & 0o022:
+            raise DeployError(f"{item} no debe ser escribible por grupo u otros")
+    return folder
+
+
+def restrict_for_sudo(row, uid, source, ref, backup, root_uid=0):
+    """Un usuario de despliegue solo puede publicar desde su carpeta de subida y no puede omitir el respaldo."""
+    if not backup:
+        raise DeployError("--skip-backup solo está permitido para root")
+    folder = incoming_dir(row, uid, root_uid)
+    if source and Path(source).resolve() != folder.resolve():
+        raise DeployError(f"Con sudo, el origen debe ser {folder}")
+    return None if ref else str(folder)
+
+
 class Deployment:
     def __init__(self, row, source=None, ref=None, backup=True, migrate=True, composer=True,
                  service="web", verbose=False):
@@ -332,6 +364,10 @@ class Deployment:
 
 
 def deploy(row, **options):
+    uid = sudo_uid()
+    if uid is not None:
+        options["source"] = restrict_for_sudo(row, uid, options.get("source"), options.get("ref"),
+                                              options.get("backup", True))
     lock_path = ROOT / "sites" / row["domain"] / ".deploy.lock"
     with lock_path.open("a") as lock:
         try:
