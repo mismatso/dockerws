@@ -56,6 +56,11 @@ case "$command" in
         networks
         site_compose "$domain" up -d --wait db
         ;;
+    site-composer)
+        require_root
+        shift
+        exec python3 "$DOCKERWS_ROOT/scripts/deploy.py" composer "$@"
+        ;;
     site-stop) site_compose "${2:?Falta dominio}" stop ;;
     site) domain="${2:?Falta dominio}"; shift 2; site_compose "$domain" "$@" ;;
     proxy) shift; proxy_compose "$@" ;;
@@ -68,5 +73,17 @@ case "$command" in
             [[ -z $domain ]] || site_compose "$domain" config --quiet
         done <<< "$domains"
         ;;
-    *) echo 'Uso: stack.sh list|networks|proxy-up|site-up DOMINIO|db-up DOMINIO|site-stop DOMINIO|site DOMINIO COMANDO...|proxy COMANDO...|validate' ;;
+    *)
+        cat <<'EOF'
+Uso: stack.sh COMANDO [ARGUMENTOS]
+  list | validate | networks
+  proxy-up                          Regenerar y aplicar la configuración del proxy
+  site-up DOMINIO                   Construir y arrancar un sitio
+  site-stop DOMINIO                 Detener todos los servicios del sitio
+  db-up DOMINIO                     Arrancar solo la base dedicada
+  site-composer DOMINIO [--service S] [SUBCOMANDO OPCIONES...]
+  site DOMINIO COMANDO...           docker compose del sitio
+  proxy COMANDO...                  docker compose del proxy
+EOF
+        ;;
 esac

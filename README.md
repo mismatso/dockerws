@@ -138,6 +138,7 @@ sudo ./scripts/stack.sh list
 sudo ./scripts/stack.sh validate
 sudo ./scripts/stack.sh site example.com logs --tail=100
 sudo ./scripts/stack.sh site example.com exec --user 33:33 web php -v
+sudo ./scripts/stack.sh site-composer app.example.com
 sudo ./scripts/stack.sh db-up example.com
 sudo ./scripts/stack.sh site-stop example.com
 sudo ./scripts/stack.sh proxy logs --tail=100

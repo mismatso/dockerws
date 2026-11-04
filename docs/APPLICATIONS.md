@@ -10,21 +10,27 @@ El código es de solo lectura. Para archivos modificables utiliza `/var/www/writ
 
 ## Laravel
 
-Copia el proyecto completo a `app/`; la raíz web será `app/public`. Incluye `vendor/` construido para la versión de PHP elegida o instala dependencias con la imagen del proyecto. Ejemplo para un código ya importado:
+Copia el proyecto completo a `app/`; la raíz web será `app/public`. Incluye `vendor/` construido para la versión de PHP elegida o instala las dependencias con la imagen del sitio:
 
 ```bash
-sudo ./scripts/stack.sh networks
-sudo ./scripts/stack.sh site app.example.com build web
-sudo ./scripts/stack.sh site app.example.com run --rm --no-deps --user 0:0 \
-  -v /opt/dockerws/sites/app.example.com/app:/var/www/html \
-  web composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+sudo ./scripts/stack.sh site-composer app.example.com
 ```
 
-Ese comando es una tarea administrativa temporal con código escribible: utiliza solamente dependencias de confianza. El servicio web sigue corriendo como UID 33 con código de solo lectura. Puedes construir dependencias y assets en CI en su lugar; Node no forma parte de la imagen PHP.
+Sin argumentos ejecuta `composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction`. Puedes pasar otro subcomando y sus opciones (`site-composer app.example.com update laravel/framework`). Si tu Compose define el servicio PHP con otro nombre, usa `--service NOMBRE` antes del subcomando.
+
+Por qué no basta un `composer install` como root: el contenedor no tiene capabilities, así que su root no tiene `DAC_OVERRIDE`. Puede escribir `app/` (propiedad de root), pero no leer `storage/` ni escribir `bootstrap/cache` (33:33, `0750`). Los scripts de Laravel (`package:discover`) fallan con «The bootstrap/cache directory must be present and writable» o «Please provide a valid cache path». `site-composer` hace:
+
+1. `composer … --no-scripts` como `0:0`, con `app/` montado escribible solo en ese contenedor temporal;
+2. `chown -R 33:33 storage bootstrap/cache` en el host, sin seguir enlaces simbólicos;
+3. `composer run-script post-autoload-dump` como `33:33` con el código de solo lectura (ejecuta `package:discover`).
+
+`post-update-cmd` (por ejemplo `vendor:publish --tag=laravel-assets`) no se ejecuta: escribiría en el código, que es de solo lectura para la aplicación. Publica esos assets al construir el código. Los subcomandos de consulta (`show`, `outdated`, `audit`, `validate`…) corren como 33:33 sin montar el código escribible. La caché de paquetes queda en `/var/cache/dockerws/composer/ID` (`0700`).
+
+El paso como root es una tarea administrativa temporal con código escribible: usa solo dependencias de confianza. El servicio web sigue corriendo como UID 33 con código de solo lectura. También puedes construir `vendor/` y los assets en CI; Node no forma parte de la imagen PHP.
 
 Revisa `runtime.env`: configura correo, servicios externos y variables propias. En una migración **conserva el APP_KEY original** para poder descifrar datos existentes. El generador crea una clave nueva solo como valor inicial; no ejecutes `key:generate` sobre una aplicación migrada. Retira del código cualquier `.env` anterior para no mezclar configuraciones.
 
-Después de importar, verifica permisos de `app/storage` y `app/bootstrap/cache`: propietario 33:33, directorios 0750 y archivos escribibles por el propietario. El asistente prepara esos directorios, pero rsync o una restauración pueden cambiar sus permisos.
+Después de importar, verifica permisos de `app/storage` y `app/bootstrap/cache`: propietario 33:33, directorios 0750 y archivos escribibles por el propietario. El asistente prepara esos directorios y `site-composer` los corrige, pero rsync o una restauración pueden cambiar sus permisos.
 
 ```bash
 sudo chown -R 33:33 sites/app.example.com/app/storage sites/app.example.com/app/bootstrap/cache
