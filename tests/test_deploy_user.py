@@ -58,8 +58,19 @@ class DeployUserTests(SiteTestCase):
             self.restrict()
 
     def test_sudo_uid_detection(self):
-        with patch.dict(os.environ, {"SUDO_UID": "1001"}):
-            self.assertEqual(deploy.sudo_uid(), 1001)
+        sudoers = self.root / "sudoers.d"
+        sudoers.mkdir()
+        (sudoers / "dockerws-deploy-deploy").write_text("")
+        with patch.object(deploy, "SUDOERS_DIR", sudoers):
+            # Usuario con la regla de install-deploy-user.sh: limitado.
+            with patch.dict(os.environ, {"SUDO_UID": "1001", "SUDO_USER": "deploy"}):
+                self.assertEqual(deploy.sudo_uid(), 1001)
+            # Administrador con sudo completo (sudo, sudo -i, sudo su): se trata como root.
+            with patch.dict(os.environ, {"SUDO_UID": "1000", "SUDO_USER": "admin"}):
+                self.assertIsNone(deploy.sudo_uid())
+            # Sin un nombre válido no se puede comprobar la regla: se limita.
+            with patch.dict(os.environ, {"SUDO_UID": "1001", "SUDO_USER": "../deploy"}):
+                self.assertEqual(deploy.sudo_uid(), 1001)
         with patch.dict(os.environ, {"SUDO_UID": "0"}):
             self.assertIsNone(deploy.sudo_uid())
         with patch.dict(os.environ, {}, clear=True):

@@ -5,6 +5,7 @@ import datetime as dt
 import fcntl
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -253,10 +254,22 @@ def link_public_storage(row, folder=None, storage=None):
         link.symlink_to(target)
 
 
+SUDOERS_DIR = Path("/etc/sudoers.d")
+USER_NAME = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+
+
 def sudo_uid():
-    """UID de quien invocó con sudo, o None si es root directamente."""
-    uid = os.environ.get("SUDO_UID", "")
-    return int(uid) if uid.isdigit() and int(uid) != 0 else None
+    """UID del usuario de despliegue que invocó con sudo, o None para root o un administrador.
+
+    Solo se restringe a quien tiene la regla que instala host/install-deploy-user.sh
+    (/etc/sudoers.d/dockerws-deploy-USUARIO). Un administrador con sudo completo (sudo, sudo -i,
+    sudo su) conserva SUDO_UID, pero ya puede hacer cualquier cosa como root: no se le limita."""
+    uid, user = os.environ.get("SUDO_UID", ""), os.environ.get("SUDO_USER", "")
+    if not uid.isdigit() or int(uid) == 0:
+        return None
+    if not USER_NAME.fullmatch(user):
+        return int(uid)  # Sin un nombre válido no se puede comprobar la regla: se limita.
+    return int(uid) if (SUDOERS_DIR / f"dockerws-deploy-{user}").exists() else None
 
 
 def incoming_dir(row, uid, root_uid=0):

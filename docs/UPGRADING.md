@@ -89,3 +89,7 @@ Si hoy despliegas con `rsync --rsync-path="sudo rsync"` y `sudo` sin contraseña
 ### Releases atómicos y `--rollback`
 
 Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). Opciones nuevas en `config/defaults.json`: `keep_releases` (5), `deploy_user_rollback` (`true`: el usuario de despliegue puede usar `--rollback` sin `--force`) y `node_image`. En un sitio con releases, `site-composer` solo admite subcomandos de consulta.
+
+### Administradores con sudo completo en `deploy.sh`
+
+Antes, `deploy.sh` trataba como usuario de despliegue a cualquiera que lo invocara con sudo (también con `sudo -i` o `sudo su`). Ahora solo limita a quien tiene la regla `/etc/sudoers.d/dockerws-deploy-USUARIO` que crea `host/install-deploy-user.sh`. Un administrador puede usar `--init-releases`, `--force`, `--skip-backup` y `--from` con cualquier origen sin abrir `sudo su -`. No requiere acción.
