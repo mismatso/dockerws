@@ -55,3 +55,9 @@ Recibirás el aviso solo si el host tiene un MTA configurado.
 - `stack.sh db-import SITIO archivo.sql[.gz] --confirm-overwrite` reemplaza el `sudo mysql BASE < archivo` manual en la modalidad `host`, y funciona igual en `container`. Ver [respaldos](BACKUPS.md#importar-un-dump-externo).
 - `backup.sh SITIO` ya existía; ahora está documentado en el README.
 - `site-up` oculta la salida de la construcción si no hay errores (`--verbose` para verla siempre).
+
+### `app.env` y `env-reload`
+
+Opcional, por sitio: `stack.sh env-split SITIO [--move CLAVE…]` y después `stack.sh env-reload SITIO`. Ver [Adopción › app.env](ADOPTION.md#appenv). A partir de ahora, tras editar `runtime.env` o `app.env`, usa `env-reload` en lugar de `site-up` + `config:cache` a mano.
+
+El `env_file` opcional (`required: false`) requiere Docker Compose 2.24 o superior. El repositorio oficial de Docker que usa `host/install-debian.sh` ya trae una versión posterior.

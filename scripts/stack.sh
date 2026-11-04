@@ -107,6 +107,24 @@ case "$command" in
         python3 "$DOCKERWS_ROOT/scripts/workers.py" disable "$domain" scheduler
         echo 'Si la aplicación necesita el scheduler, vuelve a habilitarlo o restituye su cron.'
         ;;
+    env-split)
+        require_root
+        shift
+        exec python3 "$DOCKERWS_ROOT/scripts/envfiles.py" split "$@"
+        ;;
+    env-reload)
+        require_root
+        domain="${2:?Falta dominio}"
+        service="web"
+        [[ ${3:-} != --service ]] || service="${4:?Falta servicio}"
+        python3 "$DOCKERWS_ROOT/scripts/envfiles.py" check "$domain"
+        site_compose "$domain" config --quiet
+        # Compose recrea los servicios cuyo entorno cambió (runtime.env o app.env).
+        site_compose "$domain" up -d --no-build --wait
+        if [[ $(site_field "$domain" kind) == laravel ]]; then
+            site_compose "$domain" exec -T --user 33:33 "$service" php artisan config:cache
+        fi
+        ;;
     status) python3 "$DOCKERWS_ROOT/scripts/workers.py" status ${2:+"$2"} ;;
     site-stop) site_compose "${2:?Falta dominio}" stop ;;
     site) domain="${2:?Falta dominio}"; shift 2; site_compose "$domain" "$@" ;;
@@ -132,6 +150,8 @@ Uso: stack.sh COMANDO [ARGUMENTOS]
   site-composer DOMINIO [--service S] [SUBCOMANDO OPCIONES...]
   scheduler-enable DOMINIO [--cron-file /etc/cron.d/X] [--memory 256m] [--service web]
   scheduler-disable DOMINIO
+  env-split DOMINIO [--move CLAVE...] [--service web]
+  env-reload DOMINIO [--service web] Recrear servicios con el entorno nuevo; config:cache en Laravel
   status [DOMINIO]                  Estado de los servicios; código 1 si alguno falla
   site DOMINIO COMANDO...           docker compose del sitio
   proxy COMANDO...                  docker compose del proxy

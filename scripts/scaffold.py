@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from registry import ROOT, settings, sites, validate
+import envfiles
 import workers
 
 LOGGING = {"driver": "local", "options": {"max-size": "10m", "max-file": "5"}}
@@ -58,7 +59,7 @@ def compose(row, cfg):
                    tmpfs=["/var/cache/nginx:rw,nosuid,size=32m", "/var/run:rw,nosuid,size=8m"])
     else:
         web.update(build={"context": "../../images/php-apache", "args": {"PHP_IMAGE": f"php:{row['php']}-apache-bookworm"}},
-                   env_file=["./runtime.env"], environment={"APP_DOCUMENT_ROOT": "/var/www/html/public" if kind == "laravel" else "/var/www/html"})
+                   env_file=["./runtime.env", {"path": "./app.env", "required": False}], environment={"APP_DOCUMENT_ROOT": "/var/www/html/public" if kind == "laravel" else "/var/www/html"})
         web.update(user="33:33", cap_drop=["ALL"], sysctls={"net.ipv4.ip_unprivileged_port_start": "0"},
                    tmpfs=["/tmp:rw,nosuid,size=128m", "/var/run/apache2:rw,nosuid,uid=33,gid=33,size=8m",
                           "/var/lock/apache2:rw,nosuid,uid=33,gid=33,size=8m"])
@@ -170,6 +171,8 @@ def scaffold(args):
         else:
             write(staging / "app/index.php", "<?php echo 'Sitio preparado';\n", 0o644)
         write(staging / "runtime.env", "".join(f"{k}={v}\n" for k, v in env.items()))
+        if args.type != "static":
+            write(staging / "app.env", envfiles.template(args.type))
         if mode in ("host", "container"):
             # El directorio 0700 protege estos archivos en el host; son legibles por el UID de cada imagen al montarlos.
             write(staging / "secrets/db-password", password + "\n")

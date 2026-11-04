@@ -28,7 +28,22 @@ Por qué no basta un `composer install` como root: el contenedor no tiene capabi
 
 El paso como root es una tarea administrativa temporal con código escribible: usa solo dependencias de confianza. El servicio web sigue corriendo como UID 33 con código de solo lectura. También puedes construir `vendor/` y los assets en CI; Node no forma parte de la imagen PHP.
 
-Revisa `runtime.env`: configura correo, servicios externos y variables propias. En una migración **conserva el APP_KEY original** para poder descifrar datos existentes. El generador crea una clave nueva solo como valor inicial; no ejecutes `key:generate` sobre una aplicación migrada. Retira del código cualquier `.env` anterior para no mezclar configuraciones.
+### Variables de entorno
+
+Hay dos archivos, ambos privados (`0600`):
+
+- `runtime.env`: valores que genera DockerWS (`APP_KEY`, `DB_*`, URL, entorno, `LOG_CHANNEL=stderr`).
+- `app.env`: variables propias de la aplicación (`APP_NAME`, `APP_LOCALE`, `SESSION_SECURE_COOKIE`, `MAIL_*`, claves de servicios externos). Compose lo carga **después** de `runtime.env`, así que una clave repetida en `app.env` reemplaza a la otra.
+
+Después de editar cualquiera de los dos:
+
+```bash
+sudo ./scripts/stack.sh env-reload app.example.com
+```
+
+`env-reload` recrea los servicios cuyo entorno cambió (web, scheduler) y, en Laravel, ejecuta `config:cache` para que la aplicación deje de usar la configuración anterior. Avisa, solo con el nombre de la clave, si `app.env` redefine algo de `runtime.env`. Un `site-up` no basta: no regenera la caché de configuración.
+
+En una migración **conserva el APP_KEY original** para poder descifrar datos existentes. El generador crea una clave nueva solo como valor inicial; no ejecutes `key:generate` sobre una aplicación migrada. Retira del código cualquier `.env` anterior para no mezclar configuraciones.
 
 Después de importar, verifica permisos de `app/storage` y `app/bootstrap/cache`: propietario 33:33, directorios 0750 y archivos escribibles por el propietario. El asistente prepara esos directorios y `site-composer` los corrige, pero rsync o una restauración pueden cambiar sus permisos.
 

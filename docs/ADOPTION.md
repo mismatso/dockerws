@@ -56,3 +56,22 @@ Para volver atrás:
 sudo ./scripts/stack.sh scheduler-disable app.example.com
 sudo mv /var/lib/dockerws/cron-retirado/app-example.FECHA /etc/cron.d/app-example
 ```
+
+## app.env
+
+Los sitios nuevos ya cargan `app.env`. En un sitio existente:
+
+```bash
+sudo ./scripts/stack.sh env-split app.example.com
+```
+
+Crea `app.env` con ejemplos comentados y el overlay `compose.d/10-app-env.yaml`, que agrega `app.env` (opcional) después de `runtime.env` en el servicio `web`. Si el sitio ya tiene el overlay del scheduler, también lo actualiza. Usa `--service NOMBRE` si el servicio PHP no se llama `web`.
+
+Para mover a `app.env` las variables que agregaste a mano a `runtime.env`:
+
+```bash
+sudo ./scripts/stack.sh env-split app.example.com --move APP_NAME APP_LOCALE SESSION_SECURE_COOKIE MAIL_MAILER MAIL_HOST
+sudo ./scripts/stack.sh env-reload app.example.com
+```
+
+Antes de mover, guarda una copia `runtime.env.FECHA.bak` (`0600`). Se niega a mover credenciales generadas (`APP_KEY`, `DB_*`, salts de WordPress). Nunca imprime valores. Cuando confirmes que todo funciona, borra la copia.

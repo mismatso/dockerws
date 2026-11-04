@@ -123,7 +123,8 @@ sites/<dominio>/          Instancias locales generadas, ignoradas por Git
   site.json               Metadatos sin contraseñas
   compose.yaml            Servicios, redes, volúmenes y límites
   compose.d/*.yaml        Overlays opcionales (scheduler, etc.); se cargan después
-  runtime.env             Variables privadas de aplicación
+  runtime.env             Credenciales y valores generados (APP_KEY, DB_*)
+  app.env                 Variables propias de la aplicación (correo, idioma…)
   secrets/                Credenciales administrativas/inicialización
   app/                    Código de la aplicación
   writable/               Datos escribibles para PHP genérico
@@ -143,6 +144,7 @@ sudo ./scripts/stack.sh site example.com exec --user 33:33 web php -v
 sudo ./scripts/stack.sh status                      # Código 1 si algún servicio no corre
 sudo ./scripts/stack.sh site-composer app.example.com
 sudo ./scripts/stack.sh scheduler-enable app.example.com
+sudo ./scripts/stack.sh env-reload app.example.com     # Tras editar app.env o runtime.env
 sudo ./scripts/stack.sh db-up example.com
 sudo ./scripts/stack.sh db-import example.com dump.sql.gz --confirm-overwrite
 sudo ./scripts/stack.sh site-stop example.com
