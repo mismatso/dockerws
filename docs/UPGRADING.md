@@ -93,3 +93,13 @@ Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Par
 ### Administradores con sudo completo en `deploy.sh`
 
 Antes, `deploy.sh` trataba como usuario de despliegue a cualquiera que lo invocara con sudo (también con `sudo -i` o `sudo su`). Ahora solo limita a quien tiene la regla `/etc/sudoers.d/dockerws-deploy-USUARIO` que crea `host/install-deploy-user.sh`. Un administrador puede usar `--init-releases`, `--force`, `--skip-backup` y `--from` con cualquier origen sin abrir `sudo su -`. No requiere acción.
+
+### `php.ini-production` en la imagen PHP
+
+La imagen parte ahora de `php.ini-production`, y `images/php-apache/php.ini` se aplica encima. Cambian, entre otros, `short_open_tag=Off`, `error_reporting` (sin avisos de obsolescencia) y `zend.assertions=-1`. `variables_order` se mantiene en `EGPCS`, así que `$_ENV` sigue disponible. Se aplica al reconstruir (`stack.sh site-up SITIO` o el siguiente `deploy.sh`). Antes, comprueba que el código no use etiquetas `<?` cortas:
+
+```bash
+grep -rlE '<\?($|[[:space:]])' --include='*.php' /opt/dockerws/sites/app.example.com/app | grep -v /vendor/
+```
+
+Si una aplicación antigua las necesita, agrega `short_open_tag=On` a `images/php-apache/php.ini`. Ese cambio afecta a todos los sitios.

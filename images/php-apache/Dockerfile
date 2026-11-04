@@ -9,6 +9,7 @@ RUN apt-get -o Acquire::Retries=3 update \
     && docker-php-ext-install -j2 pdo_mysql mysqli pdo_pgsql pdo_sqlite mbstring intl zip gd bcmath \
     && if php -r 'exit(PHP_VERSION_ID >= 80500 ? 1 : 0);'; then docker-php-ext-install opcache; fi \
     && a2enmod rewrite headers remoteip \
+    && cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini" \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
