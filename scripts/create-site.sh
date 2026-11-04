@@ -32,11 +32,16 @@ elif [[ $kind != static ]]; then
     if [[ $required == si ]]; then engine="$(choose 'Motor:' mariadb mysql postgres sqlite)"; fi
 fi
 if [[ $engine == sqlite ]]; then
-    mode=file
+    mode="file"
 elif [[ $engine != none ]]; then
     mode="$(choose 'Modalidad: container = instancia dedicada; host = instancia compartida de Debian:' container host)"
 fi
 args+=(--database "$engine" --db-mode "$mode")
+scheduler=no
+if [[ $kind == laravel ]]; then
+    scheduler="$(choose '¿Ejecutar el scheduler de Laravel (schedule:work) en un servicio propio? Reemplaza el cron del host.' si no)"
+    [[ $scheduler != si ]] || args+=(--scheduler)
+fi
 if [[ $mode == host ]]; then
     default_socket=/run/mysqld
     [[ $engine != postgres ]] || default_socket=/var/run/postgresql
@@ -51,6 +56,7 @@ if [[ $mode == host ]]; then
     fi
 fi
 printf '\nSe creará %s: %s, %s/%s.\n' "$domain" "$kind" "$engine" "$mode"
+[[ $scheduler != si ]] || printf 'Con servicio scheduler.\n'
 read -rp 'Crear estructura [S/n]: ' confirm
 [[ ${confirm,,} != n ]] || exit 0
 python3 "$DOCKERWS_ROOT/scripts/scaffold.py" "${args[@]}"

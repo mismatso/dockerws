@@ -69,7 +69,26 @@ El restaurador comprueba dominio, nombre de base, motor, checksum y que no quede
 
 **SQLite** restaura mediante la API al archivo destino y conserva propietario 33:33. Requiere detener todas sus conexiones escritoras antes de hacerlo.
 
-Importar dumps antiguos o externos es una operación de migración distinta: no tendrán el manifiesto de DockerWS. Utiliza el cliente específico del motor, revisa collation, versión, extensiones, definers, eventos, roles y permisos. En particular, los dumps recientes de MariaDB incluyen comandos que el cliente de MySQL no interpreta; [compatibilidad de mariadb-dump](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump).
+## Importar un dump externo
+
+Para migrar datos desde otro servidor, sin manifiesto de DockerWS:
+
+```bash
+sudo ./scripts/stack.sh site app.example.com stop web scheduler
+sudo ./scripts/backup.sh app.example.com
+sudo ./scripts/stack.sh db-import app.example.com /root/origen.sql.gz --confirm-overwrite
+sudo ./scripts/stack.sh site-up app.example.com
+```
+
+Funciona igual en las modalidades `host` y `container`, con MySQL, MariaDB y PostgreSQL. Usa el mismo cliente administrativo que `restore.sh`, así que no hace falta `sudo mysql BASE` a mano. Acepta `.sql` y `.sql.gz`; el formato se detecta por el contenido.
+
+- Antes de escribir, lee el archivo completo. Así detecta un gzip dañado y rechaza sentencias que saldrían de la base del sitio: `USE`, `CREATE/DROP DATABASE`, usuarios, `GRANT`, roles y `\connect`. Genera el dump de una sola base, sin `--databases` (MySQL/MariaDB) o con `pg_dump --no-owner --no-privileges` (PostgreSQL).
+- Exige que `web`, `scheduler` y los workers estén detenidos.
+- PostgreSQL requiere una base vacía, igual que la restauración, y carga con el rol de la aplicación.
+- MySQL/MariaDB reemplaza las tablas incluidas en el dump y conserva las demás. Una importación fallida puede dejar cambios parciales: por eso conviene el respaldo previo.
+- SQLite no se importa con este comando: usa `restore.sh` o `sqlite3`.
+
+Revisa también collation, versión, extensiones, definers, eventos, roles y permisos. En particular, los dumps recientes de MariaDB incluyen comandos que el cliente de MySQL no interpreta; [compatibilidad de mariadb-dump](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump).
 
 ## Qué más debes respaldar
 

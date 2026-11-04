@@ -12,6 +12,8 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from registry import ROOT, settings, sites, validate
+import envfiles
+import workers
 
 LOGGING = {"driver": "local", "options": {"max-size": "10m", "max-file": "5"}}
 
@@ -57,7 +59,7 @@ def compose(row, cfg):
                    tmpfs=["/var/cache/nginx:rw,nosuid,size=32m", "/var/run:rw,nosuid,size=8m"])
     else:
         web.update(build={"context": "../../images/php-apache", "args": {"PHP_IMAGE": f"php:{row['php']}-apache-bookworm"}},
-                   env_file=["./runtime.env"], environment={"APP_DOCUMENT_ROOT": "/var/www/html/public" if kind == "laravel" else "/var/www/html"})
+                   env_file=["./runtime.env", {"path": "./app.env", "required": False}], environment={"APP_DOCUMENT_ROOT": "/var/www/html/public" if kind == "laravel" else "/var/www/html"})
         web.update(user="33:33", cap_drop=["ALL"], sysctls={"net.ipv4.ip_unprivileged_port_start": "0"},
                    tmpfs=["/tmp:rw,nosuid,size=128m", "/var/run/apache2:rw,nosuid,uid=33,gid=33,size=8m",
                           "/var/lock/apache2:rw,nosuid,uid=33,gid=33,size=8m"])
@@ -117,6 +119,8 @@ def scaffold(args):
                         "socket_dir": args.socket_dir or ("/var/run/postgresql" if engine == "postgres" else "/run/mysqld"),
                         "socket_name": args.socket_name, "port": args.db_port or (5432 if engine == "postgres" else 3306)}}
     validate(row)
+    if args.scheduler and args.type != "laravel":
+        raise ValueError("--scheduler solo se admite en sitios laravel")
     target = ROOT / "sites" / row["domain"]
     existing = sites()
     names = [row["domain"], *row["aliases"]]
@@ -129,7 +133,12 @@ def scaffold(args):
         for directory in ("app", "secrets", "data", "writable"):
             (staging / directory).mkdir(mode=0o700 if directory == "secrets" else 0o755)
         write(staging / "site.json", json.dumps(row, indent=2) + "\n")
-        write(staging / "compose.yaml", json.dumps(compose(row, cfg), indent=2) + "\n")
+        generated = compose(row, cfg)
+        write(staging / "compose.yaml", json.dumps(generated, indent=2) + "\n")
+        if args.scheduler:
+            service = workers.derive(generated["services"]["web"], generated["name"], "scheduler", cfg)
+            (staging / "compose.d").mkdir(mode=0o755)
+            write(staging / "compose.d/50-scheduler.yaml", workers.overlay(service, "scheduler"))
         write(staging / ".env", "# Reservado para interpolación de Compose. Credenciales en runtime.env.\n")
         password, admin = secrets.token_hex(32), secrets.token_hex(32)
         db = row["database"]
@@ -162,6 +171,8 @@ def scaffold(args):
         else:
             write(staging / "app/index.php", "<?php echo 'Sitio preparado';\n", 0o644)
         write(staging / "runtime.env", "".join(f"{k}={v}\n" for k, v in env.items()))
+        if args.type != "static":
+            write(staging / "app.env", envfiles.template(args.type))
         if mode in ("host", "container"):
             # El directorio 0700 protege estos archivos en el host; son legibles por el UID de cada imagen al montarlos.
             write(staging / "secrets/db-password", password + "\n")
@@ -190,7 +201,12 @@ def scaffold(args):
         raise
     print(f"Creado: {target}\nTipo: {args.type}; base de datos: {engine}/{mode}")
     print("Las credenciales están en runtime.env y secrets/; no se imprimen ni se versionan.")
-    print(f"Siguientes pasos: importar la aplicación; scripts/stack.sh site-up {args.domain}; scripts/stack.sh proxy-up")
+    if args.scheduler:
+        print("Scheduler: servicio scheduler en compose.d/50-scheduler.yaml; no hace falta cron en el host.")
+    if args.type == "laravel":
+        print(f"Siguientes pasos: scripts/deploy.sh {args.domain} --from DIRECTORIO_DEL_CÓDIGO; scripts/stack.sh proxy-up")
+    else:
+        print(f"Siguientes pasos: importar la aplicación; scripts/stack.sh site-up {args.domain}; scripts/stack.sh proxy-up")
 
 
 def parser():
@@ -205,6 +221,7 @@ def parser():
     p.add_argument("--socket-dir")
     p.add_argument("--socket-name", default="mysqld.sock")
     p.add_argument("--db-port", type=int)
+    p.add_argument("--scheduler", action="store_true", help="Laravel: servicio scheduler con schedule:work")
     return p
 
 

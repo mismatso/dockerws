@@ -67,25 +67,36 @@ Requisitos: Debian 13 o 12, acceso root, DNS público del dominio y puertos 80/4
    sudo ./scripts/stack.sh proxy-up
    ```
 
-6. Apunta los registros A y, si aplica, AAAA al servidor. Solicita el certificado:
+6. Apunta los registros A y, si aplica, AAAA al servidor. Comprueba el desafío y solicita el certificado:
 
    ```bash
-   sudo ./scripts/issue-cert.sh example.com admin@example.com --dry-run
-   sudo ./scripts/issue-cert.sh example.com admin@example.com
+   sudo ./scripts/issue-cert.sh example.com --check
+   sudo ./scripts/issue-cert.sh example.com
    sudo certbot renew --dry-run
    ```
 
-   Todos los alias declarados también deben resolver al servidor. El primer comando prueba la emisión sin guardar un certificado de producción. Antes de tener certificado, el sitio devuelve HTTP 503 excepto en el desafío ACME. Después redirige HTTP a HTTPS. El timer de Certbot renueva y su deploy-hook valida y recarga Nginx automáticamente.
+   Todos los alias declarados también deben resolver al servidor. `--check` publica un token temporal en el webroot de ACME y lo pide para el dominio y cada alias, de dos formas: al proxy local y por el DNS público, siguiendo redirecciones como lo hace Let's Encrypt. Después lo borra. No contacta a Let's Encrypt, así que no depende del entorno staging ni consume límites. `--dry-run` sigue disponible y usa staging.
+
+   El correo es opcional (`issue-cert.sh example.com admin@example.com`). Let's Encrypt ya no envía avisos de vencimiento, y con una cuenta ya registrada en el servidor el correo no se usa. Antes de tener certificado, el sitio devuelve HTTP 503, excepto en el desafío ACME. Después redirige HTTP a HTTPS. El timer de Certbot renueva y su deploy-hook valida y recarga Nginx.
+
+   **Con Cloudflare (proxy activado, nube naranja):**
+
+   - El origen no tiene TLS hasta emitir el primer certificado. Si Cloudflare intenta HTTPS hacia el origen, el visitante ve **525** en lugar del 503. Emite primero con el registro en gris (solo DNS) o confirma con `--check` que el desafío pasa a través de Cloudflare.
+   - **«Always Use HTTPS»** y las reglas de redirección a HTTPS envían el desafío a `https://` y producen 525. Desactívalas para el primer certificado o excluye `/.well-known/acme-challenge/*`. Lo mismo con reglas de WAF, Bot Fight Mode o desafíos que afecten esa ruta. `--check` detecta Cloudflare en la respuesta y lo indica.
+   - Con certificado emitido, usa el modo SSL **Full (strict)**. «Flexible» genera bucles de redirección; «Full» sin `strict` no valida el certificado del origen.
+   - Las renovaciones pasan por HTTP-01 igual que la primera emisión: mantén la excepción para `/.well-known/acme-challenge/`.
+   - Para registrar la IP real del visitante, agrega un archivo manual, por ejemplo `proxy/conf.d/05-cloudflare-realip.conf`, con `set_real_ip_from` para cada [rango de Cloudflare](https://www.cloudflare.com/ips/) y `real_ip_header CF-Connecting-IP;`. El generador conserva los archivos que no creó.
 
 7. Genera y verifica un primer respaldo:
 
    ```bash
-   sudo ./scripts/backup.sh
+   sudo ./scripts/backup.sh                    # Todos los sitios con BD
+   sudo ./scripts/backup.sh example.com        # Solo un sitio
    ```
 
    El cron lo ejecuta diariamente a las 02:15, hora del servidor. Conserva 30 días en `/var/backups/dockerws`, con directorios `0700` y archivos `0600`. Consulta [respaldos y restauración](docs/BACKUPS.md).
 
-Cada vez que agregues un sitio, ejecuta `proxy-up` para que Nginx se conecte a la nueva red. Esto puede recrear el proxy y cortar conexiones brevemente; planifica altas en una ventana adecuada. Las renovaciones de certificados usan una recarga, sin recrearlo.
+Cada vez que agregues un sitio, ejecuta `proxy-up` para que Nginx se conecte a la nueva red. Si el proxy está corriendo, `proxy-up` conecta las redes nuevas con `docker network connect`, desconecta las de sitios eliminados, valida con `nginx -t` y recarga, sin recrear el contenedor ni cortar conexiones de los demás sitios. Esas conexiones persisten tras reiniciar el contenedor o el host. `proxy-up --recreate` recrea el proxy como antes; hace falta solo si cambias la imagen de Nginx o la definición del servicio (puertos, montajes). Las renovaciones de certificados usan una recarga, sin recrearlo.
 
 ## Uso no interactivo
 
@@ -104,7 +115,7 @@ sudo ./scripts/create-site.sh --domain small.example.com --type php --database s
 sudo ./scripts/create-site.sh --domain www.example.com --type static
 ```
 
-Opciones adicionales: `--alias` (repetible), `--id`, `--php`, `--socket-dir`, `--socket-name`, `--db-port`. El modo no interactivo solo genera archivos; usa `provision-host-db.sh` explícitamente si eliges el host. Puedes generar archivos sin root para revisarlos, pero en el servidor debes crearlos con sudo para asignar los permisos de escritura de la aplicación.
+Opciones adicionales: `--alias` (repetible), `--id`, `--php`, `--socket-dir`, `--socket-name`, `--db-port`, y `--scheduler` (solo Laravel: servicio `schedule:work`, sin cron en el host). El modo no interactivo solo genera archivos; usa `provision-host-db.sh` explícitamente si eliges el host. Puedes generar archivos sin root para revisarlos, pero en el servidor debes crearlos con sudo para asignar los permisos de escritura de la aplicación.
 
 Un dominio, alias o ID duplicado produce un error. No se sobrescriben sitios, contraseñas, bases o usuarios existentes. Los ID/nombres SQL se derivan del dominio y son independientes entre sitios.
 
@@ -113,7 +124,7 @@ Un dominio, alias o ID duplicado produce un error. No se sobrescriben sitios, co
 ```text
 config/defaults.json      Valores públicos predeterminados
 config/local.json         Cambios locales opcionales, ignorados por Git
-host/                     Instalación de Debian, cron y deploy-hook
+host/                     Instalación de Debian, cron, deploy-hook y usuario de despliegue
 images/php-apache/        Imagen PHP compartida, extensiones y Apache
 templates/                Configuración inicial de WordPress y estáticos
 proxy/                    Nginx y configuración generada
@@ -121,15 +132,30 @@ scripts/                  Asistente, operación, certificados y respaldos
 sites/<dominio>/          Instancias locales generadas, ignoradas por Git
   site.json               Metadatos sin contraseñas
   compose.yaml            Servicios, redes, volúmenes y límites
-  runtime.env             Variables privadas de aplicación
+  compose.d/*.yaml        Overlays opcionales (scheduler, etc.); se cargan después
+  runtime.env             Credenciales y valores generados (APP_KEY, DB_*)
+  app.env                 Variables propias de la aplicación (correo, idioma…)
   secrets/                Credenciales administrativas/inicialización
-  app/                    Código de la aplicación
+  app/                    Código de la aplicación (o enlace a releases/FECHA)
+  releases/               Releases atómicos, cuando el sitio los usa
+  shared/storage/         storage/ de Laravel compartido entre releases
   writable/               Datos escribibles para PHP genérico
   data/sqlite/            Archivo SQLite, cuando corresponde
 tests/                    Pruebas unitarias e integración con Docker
 ```
 
-No editar a mano `site.json` para cambiar el motor, dominio o modalidad de un sitio existente: esas operaciones requieren una migración de datos. `compose.yaml` puede adaptarse después de crearlo; el generador nunca lo reescribe. `config/local.json` solo afecta sitios nuevos (excepto opciones operativas como respaldos y la imagen del proxy).
+No editar a mano `site.json` para cambiar el motor, dominio o modalidad de un sitio existente: esas operaciones requieren una migración de datos. `compose.yaml` puede adaptarse después de crearlo; el generador nunca lo reescribe. Las mejoras posteriores se agregan como overlays en `compose.d/`; ver [adopción en sitios existentes](docs/ADOPTION.md) y [notas de actualización](docs/UPGRADING.md). `config/local.json` solo afecta sitios nuevos (excepto opciones operativas como respaldos y la imagen del proxy).
+
+## Despliegue
+
+```bash
+sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.example.com
+sudo ./scripts/deploy.sh app.example.com --ref main
+```
+
+En Laravel: mantenimiento, respaldo de la base del sitio, sincronización del código, composer, `migrate --force`, `optimize`, recreación de los contenedores y `artisan up`. Admite ganchos `pre-deploy`/`post-deploy`. Los contenedores siempre se recrean, así que no hace falta reiniciar `web` después. Node no está en la imagen PHP: los assets se compilan fuera. Para desplegar sin dar `sudo` amplio, `host/install-deploy-user.sh` crea una carpeta de subida y una regla de sudo limitada a `deploy.sh`.
+
+Opcionalmente, `deploy.sh DOMINIO --init-releases` cambia el sitio a releases atómicos: el código se prepara con el sitio en línea, las migraciones corren antes de activarlo y `deploy.sh DOMINIO --rollback` vuelve al release anterior si la base lo permite. Detalles en [la guía de aplicaciones](docs/APPLICATIONS.md#desplegar-laravel-y-php).
 
 ## Operación
 
@@ -138,12 +164,17 @@ sudo ./scripts/stack.sh list
 sudo ./scripts/stack.sh validate
 sudo ./scripts/stack.sh site example.com logs --tail=100
 sudo ./scripts/stack.sh site example.com exec --user 33:33 web php -v
+sudo ./scripts/stack.sh status                      # Código 1 si algún servicio no corre
+sudo ./scripts/stack.sh site-composer app.example.com
+sudo ./scripts/stack.sh scheduler-enable app.example.com
+sudo ./scripts/stack.sh env-reload app.example.com     # Tras editar app.env o runtime.env
 sudo ./scripts/stack.sh db-up example.com
+sudo ./scripts/stack.sh db-import example.com dump.sql.gz --confirm-overwrite
 sudo ./scripts/stack.sh site-stop example.com
 sudo ./scripts/stack.sh proxy logs --tail=100
 ```
 
-`site-stop` detiene también la base dedicada. Para mantenimiento de la aplicación manteniendo la base encendida: `stack.sh site example.com stop web`.
+`site-up` muestra la salida de la construcción de la imagen solo si falla; usa `site-up DOMINIO --verbose` para verla siempre. `site-stop` detiene también la base dedicada y el scheduler. Para mantenimiento de la aplicación manteniendo la base encendida: `stack.sh site example.com stop web`.
 
 Los límites de memoria son topes, no reservas: web 512 MiB, BD dedicada 768 MiB, proxy 256 MiB. Debes ajustarlos al tráfico, consultas y memoria real; no equivalen a un dimensionamiento garantizado. Una instancia de BD compartida reduce la memoria base de múltiples procesos, aunque su caída afecta a todos sus sitios.
 

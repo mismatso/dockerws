@@ -7,7 +7,12 @@
   "nginx_image": "nginx:stable-alpine",
   "web_memory": "512m",
   "db_memory": "768m",
+  "scheduler_memory": "256m",
   "backup_dir": "/var/backups/dockerws",
   "retention_days": 30,
-  "backup_timeout": 1800
+  "backup_timeout": 1800,
+  "deploy_incoming_dir": "/srv/dockerws/incoming",
+  "deploy_user_rollback": true,
+  "keep_releases": 5,
+  "node_image": "node:22-bookworm-slim"
 }

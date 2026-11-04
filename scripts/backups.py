@@ -156,15 +156,73 @@ def backup_all(args, base):
     return int(failed)
 
 
+def ensure_writers_stopped(row):
+    running = subprocess.run(compose_args(row) + ["ps", "--status", "running", "--services"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    if any(service != "db" for service in running):
+        raise ValueError("Detener web, scheduler y workers antes de restaurar o importar")
+
+
+def open_sql(source):
+    """Abre .sql o .sql.gz según su contenido, no según la extensión."""
+    with Path(source).open("rb") as stream:
+        magic = stream.read(2)
+    return gzip.open(source, "rb") if magic == b"\x1f\x8b" else Path(source).open("rb")
+
+
+# Un dump importado no debe cambiar de base ni crear otras: se ejecuta como administrador del motor.
+FORBIDDEN = {
+    "mysql": re.compile(rb"\s*(USE\s|CREATE\s+(DATABASE|SCHEMA)\b|DROP\s+(DATABASE|SCHEMA)\b|CREATE\s+USER\b|GRANT\s)", re.I),
+    "postgres": re.compile(rb"\s*(\\c(onnect)?\s|CREATE\s+DATABASE\b|DROP\s+DATABASE\b|CREATE\s+ROLE\b|ALTER\s+ROLE\b)", re.I),
+}
+
+
+def scan_sql(row, source):
+    """Lee el archivo completo (valida el CRC de gzip) y rechaza sentencias fuera de la base del sitio."""
+    pattern = FORBIDDEN["postgres" if row["database"]["engine"] == "postgres" else "mysql"]
+    empty = True
+    try:
+        with open_sql(source) as stream:
+            for number, line in enumerate(stream, 1):
+                empty = empty and not line.strip()
+                if pattern.match(line[:80]):
+                    text = line[:60].decode(errors="replace").strip()
+                    raise ValueError(f"Línea {number}: «{text}». El dump debe contener solo la base del sitio "
+                                     "(sin USE, CREATE/DROP DATABASE, usuarios ni roles). Genera el dump sin --databases.")
+    except (EOFError, gzip.BadGzipFile) as exc:
+        raise ValueError(f"Archivo comprimido dañado o incompleto: {exc}") from exc
+    if empty:
+        raise ValueError("El archivo SQL está vacío")
+
+
+def load_sql(row, source):
+    db = row["database"]
+    if db["engine"] == "postgres":
+        count = query(row, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                           "WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%';", db["name"])
+        if count != "0":
+            raise ValueError("PostgreSQL requiere una base vacía para restaurar o importar; ver docs/BACKUPS.md")
+    with open_sql(source) as stream, tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(restore_command(row), stdin=subprocess.PIPE, stderr=errors, stdout=subprocess.DEVNULL)
+        try:
+            if db["engine"] == "postgres":
+                process.stdin.write(f"SET ROLE {db['user']};\n".encode())
+            shutil.copyfileobj(stream, process.stdin)
+            process.stdin.close()
+            if process.wait() != 0:
+                raise RuntimeError("Carga SQL fallida; mantener aplicación detenida y revisar compatibilidad")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
 def restore(args):
     row = site(args.domain)
     if not args.confirm_overwrite:
         raise ValueError("Se requiere --confirm-overwrite; detener antes web, workers y cualquier escritor externo")
     source = verify(row, Path(args.folder))
-    running = subprocess.run(compose_args(row) + ["ps", "--status", "running", "--services"],
-                             capture_output=True, text=True, check=True).stdout.split()
-    if any(service != "db" for service in running):
-        raise ValueError("Detener web y workers antes de restaurar")
+    ensure_writers_stopped(row)
     db = row["database"]
     if db["engine"] == "sqlite":
         target = ROOT / "sites" / row["domain"] / "data/sqlite/database.sqlite"
@@ -178,25 +236,27 @@ def restore(args):
         with gzip.open(source, "rb") as stream:
             while stream.read(1024 * 1024):
                 pass  # Validar CRC antes de iniciar cualquier escritura.
-        if db["engine"] == "postgres":
-            count = query(row, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-                               "WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%';", db["name"])
-            if count != "0":
-                raise ValueError("PostgreSQL requiere una base vacía para restaurar; ver docs/BACKUPS.md")
-        with gzip.open(source, "rb") as stream, tempfile.TemporaryFile() as errors:
-            process = subprocess.Popen(restore_command(row), stdin=subprocess.PIPE, stderr=errors, stdout=subprocess.DEVNULL)
-            try:
-                if db["engine"] == "postgres":
-                    process.stdin.write(f"SET ROLE {db['user']};\n".encode())
-                shutil.copyfileobj(stream, process.stdin)
-                process.stdin.close()
-                if process.wait() != 0:
-                    raise RuntimeError("Restauración SQL fallida; mantener aplicación detenida y revisar compatibilidad")
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+        load_sql(row, source)
     print(f"Restauración finalizada: {args.domain}")
+
+
+def import_sql(args):
+    """Importa un dump externo (.sql o .sql.gz) igual en las modalidades host y container."""
+    row = site(args.domain)
+    db = row["database"]
+    if db["engine"] in ("none", "sqlite"):
+        raise ValueError("db-import admite MySQL, MariaDB y PostgreSQL; para SQLite usa restore.sh o sqlite3")
+    if not args.confirm_overwrite:
+        raise ValueError("Se requiere --confirm-overwrite: el dump reemplaza tablas de la base del sitio")
+    source = Path(args.file)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("Se espera un archivo regular, no un enlace simbólico")
+    if db["mode"] == "host" and not (ROOT / "sites" / row["domain"] / "host-db.ready").exists():
+        raise ValueError("Base compartida pendiente de aprovisionar")
+    scan_sql(row, source)
+    ensure_writers_stopped(row)
+    load_sql(row, source)
+    print(f"Importación finalizada: {args.domain} ({db['engine']}/{db['mode']})")
 
 
 def main():
@@ -208,6 +268,10 @@ def main():
     r.add_argument("domain")
     r.add_argument("folder")
     r.add_argument("--confirm-overwrite", action="store_true")
+    i = commands.add_parser("import")
+    i.add_argument("domain")
+    i.add_argument("file")
+    i.add_argument("--confirm-overwrite", action="store_true")
     one = commands.add_parser("_one")
     one.add_argument("domain")
     one.add_argument("folder")
@@ -227,7 +291,9 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError("Ya hay un respaldo o restauración en curso")
-        return backup_all(args, base) if args.action == "backup" else restore(args)
+        if args.action == "backup":
+            return backup_all(args, base)
+        return restore(args) if args.action == "restore" else import_sql(args)
 
 
 if __name__ == "__main__":

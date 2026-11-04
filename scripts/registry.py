@@ -81,10 +81,17 @@ def site(domain):
     return next(r for r in sites() if r["domain"] == domain)
 
 
+def compose_files(row):
+    """compose.yaml y luego los overlays de compose.d/ en orden lexicográfico."""
+    path = ROOT / "sites" / row["domain"]
+    overlays = sorted((path / "compose.d").glob("*.yaml"), key=lambda p: p.name.encode())
+    return [path / "compose.yaml", *overlays]
+
+
 def compose_args(row):
     path = ROOT / "sites" / row["domain"]
-    return ["docker", "compose", "--project-directory", str(path), "--env-file", str(path / ".env"),
-            "-f", str(path / "compose.yaml")]
+    files = [arg for file in compose_files(row) for arg in ("-f", str(file))]
+    return ["docker", "compose", "--project-directory", str(path), "--env-file", str(path / ".env"), *files]
 
 
 if __name__ == "__main__":
