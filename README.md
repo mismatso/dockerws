@@ -134,6 +134,15 @@ tests/                    Pruebas unitarias e integración con Docker
 
 No editar a mano `site.json` para cambiar el motor, dominio o modalidad de un sitio existente: esas operaciones requieren una migración de datos. `compose.yaml` puede adaptarse después de crearlo; el generador nunca lo reescribe. Las mejoras posteriores se agregan como overlays en `compose.d/`; ver [adopción en sitios existentes](docs/ADOPTION.md) y [notas de actualización](docs/UPGRADING.md). `config/local.json` solo afecta sitios nuevos (excepto opciones operativas como respaldos y la imagen del proxy).
 
+## Despliegue
+
+```bash
+sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.example.com
+sudo ./scripts/deploy.sh app.example.com --ref main
+```
+
+En Laravel: mantenimiento, respaldo de la base del sitio, sincronización del código, composer, `migrate --force`, `optimize`, recreación de los contenedores y `artisan up`. Admite ganchos `pre-deploy`/`post-deploy`. Los contenedores siempre se recrean, así que no hace falta reiniciar `web` después. Node no está en la imagen PHP: los assets se compilan fuera. Detalles en [la guía de aplicaciones](docs/APPLICATIONS.md#desplegar-laravel-y-php).
+
 ## Operación
 
 ```bash

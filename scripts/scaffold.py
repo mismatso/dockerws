@@ -203,7 +203,11 @@ def scaffold(args):
     print("Las credenciales están en runtime.env y secrets/; no se imprimen ni se versionan.")
     if args.scheduler:
         print("Scheduler: servicio scheduler en compose.d/50-scheduler.yaml; no hace falta cron en el host.")
-    print(f"Siguientes pasos: importar la aplicación; scripts/stack.sh site-up {args.domain}; scripts/stack.sh proxy-up")
+    if args.type == "laravel":
+        print(f"Siguientes pasos: scripts/deploy.sh {args.domain} --from DIRECTORIO_DEL_CÓDIGO; scripts/stack.sh proxy-up")
+    else:
+        print(f"Siguientes pasos: importar la aplicación; scripts/stack.sh site-up {args.domain}; scripts/stack.sh proxy-up")
+
 
 def parser():
     p = argparse.ArgumentParser(description="Crear un sitio sin iniciar servicios ni descargar aplicaciones")

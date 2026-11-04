@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Tareas de aplicación: composer. Se invoca como root desde stack.sh."""
+"""Tareas de aplicación: composer y despliegue. Se invoca como root desde stack.sh y deploy.sh."""
 import argparse
+import fcntl
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -112,6 +114,233 @@ def composer(row, args, service="web", verbose=False):
               "Publica los assets de paquetes durante la construcción o el despliegue.")
 
 
+# --- Despliegue en sitio (app/ es un directorio) ------------------------------------------
+
+HOOKS = ("pre-deploy", "post-deploy")
+# Rutas que el despliegue nunca toca: datos, caché de Laravel, dependencias y secretos.
+EXCLUDES = {
+    "laravel": ["/.env", "/.git/", "/storage/", "/bootstrap/cache/", "/public/storage", "/node_modules/"],
+    "php": ["/.env", "/.git/", "/node_modules/"],
+}
+
+
+class DeployError(RuntimeError):
+    pass
+
+
+def artisan(row, service, *args, deps=False):
+    command = compose_args(row) + ["run", "--rm"] + ([] if deps else ["--no-deps"])
+    return command + ["--user", "33:33", service, "php", "artisan", *args]
+
+
+def running_services(row):
+    result = subprocess.run(compose_args(row) + ["ps", "--status", "running", "--services"],
+                            capture_output=True, text=True, check=True)
+    return result.stdout.split()
+
+
+def app_services(row):
+    """Servicios definidos en el Compose (incluidos los overlays)."""
+    result = subprocess.run(compose_args(row) + ["config", "--services"], capture_output=True, text=True, check=True)
+    return result.stdout.split()
+
+
+def services_to_recreate(defined, running, service):
+    """web, los workers de DockerWS y lo que ya corría; nunca db ni servicios detenidos a propósito
+    (por ejemplo, un servicio que solo construye la imagen)."""
+    workers = {"scheduler"}
+    return [s for s in defined if s != "db" and (s == service or s in workers or s in running)]
+
+
+def hook(row, name):
+    """Ganchos del host: solo archivos de root, no escribibles por otros, fuera del código desplegado."""
+    folder = ROOT / "sites" / row["domain"] / "hooks"
+    path = folder / name
+    if not path.exists() and not path.is_symlink():
+        return None
+    for item in (folder, path):
+        info = item.lstat()
+        if stat.S_ISLNK(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise DeployError(f"Gancho inseguro {item}: debe ser de root, sin enlaces y sin escritura de grupo/otros")
+    if not stat.S_ISREG(path.lstat().st_mode) or not os.access(path, os.X_OK):
+        raise DeployError(f"Gancho {path} debe ser un archivo ejecutable")
+    return path
+
+
+def run_hook(row, name, env):
+    path = hook(row, name)
+    if path:
+        print(f"==> Gancho {name}", flush=True)
+        run([str(path)], cwd=ROOT / "sites" / row["domain"], env={**os.environ, **env})
+
+
+def check_source(row, source):
+    source = Path(source)
+    if source.is_symlink() or not source.is_dir():
+        raise DeployError(f"El origen debe ser un directorio, no un enlace: {source}")
+    source = source.resolve()
+    app = (ROOT / "sites" / row["domain"] / "app").resolve()
+    if source == app or app in source.parents or source in app.parents:
+        raise DeployError("El origen no puede ser app/ ni contenerlo")
+    if row["kind"] == "laravel" and not ((source / "artisan").is_file() and (source / "composer.json").is_file()):
+        raise DeployError("El origen no parece un proyecto Laravel (faltan artisan o composer.json)")
+    if not any(source.iterdir()):
+        raise DeployError("El origen está vacío; no se sincroniza para no borrar app/")
+    return source
+
+
+def rsync_command(row, source, composer_runs):
+    excludes = list(EXCLUDES[row["kind"]])
+    if composer_runs:
+        excludes.append("/vendor/")
+    # Sin -o/-g: los archivos quedan de root. go-w,go+rX: legibles por 33, escribibles solo por root.
+    command = ["rsync", "-rlpt", "--delete", "--chmod=go-w,go+rX"]
+    command += [f"--exclude={item}" for item in excludes]
+    return command + [f"{source}/", f"{ROOT / 'sites' / row['domain'] / 'app'}/"]
+
+
+def git(app, *args, capture=False):
+    command = ["git", "-c", f"safe.directory={app}", "-C", str(app), *args]
+    if capture:
+        return subprocess.run(command, capture_output=True, text=True, check=True).stdout.strip()
+    return run(command)
+
+
+def resolve_ref(row, ref):
+    app = app_dir(row)
+    if not (app / ".git").exists():
+        raise DeployError("--ref requiere que app/ sea un checkout de git")
+    if git(app, "status", "--porcelain", "--untracked-files=no", capture=True):
+        raise DeployError("app/ tiene cambios locales en archivos versionados; resuélvelos antes de desplegar")
+    git(app, "fetch", "--prune", "--tags", "origin")
+    for candidate in (f"refs/remotes/origin/{ref}", ref):
+        result = subprocess.run(["git", "-c", f"safe.directory={app}", "-C", str(app), "rev-parse", "--verify",
+                                 "--quiet", candidate + "^{commit}"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    raise DeployError(f"No existe la referencia {ref}")
+
+
+def link_public_storage(row):
+    """storage:link no puede escribir en el código montado de solo lectura: se crea desde el host."""
+    app = app_dir(row)
+    link, target = app / "public/storage", "../storage/app/public"
+    if (app / "storage/app/public").is_dir() and (app / "public").is_dir() and not link.exists() and not link.is_symlink():
+        link.symlink_to(target)
+
+
+class Deployment:
+    def __init__(self, row, source=None, ref=None, backup=True, migrate=True, composer=True,
+                 service="web", verbose=False):
+        if row["kind"] not in EXCLUDES:
+            raise DeployError("deploy.sh admite sitios laravel y php")
+        if source and ref:
+            raise DeployError("Usa --from o --ref, no ambos")
+        self.row, self.source, self.ref = row, source, ref
+        self.backup, self.migrate, self.composer = backup, migrate, composer
+        self.service, self.verbose = service, verbose
+        self.laravel = row["kind"] == "laravel"
+        self.maintenance = False
+
+    def step(self, text):
+        print(f"==> {text}", flush=True)
+
+    def prepare(self):
+        """Todo lo que puede fallar sin afectar al sitio en línea."""
+        if self.source:
+            self.source = check_source(self.row, self.source)
+        if self.ref:
+            self.step(f"Obteniendo {self.ref}")
+            self.commit = resolve_ref(self.row, self.ref)
+        app = app_dir(self.row)
+        if self.composer and not self.source and not (app / "composer.json").exists() and not self.laravel:
+            self.composer = False
+        self.step("Construyendo la imagen")
+        build_quiet(self.row, self.verbose)
+        self.env = {"DOCKERWS_SITE": self.row["domain"], "DOCKERWS_APP": str(app),
+                    "DOCKERWS_SOURCE": str(self.source or ""), "DOCKERWS_REF": self.ref or ""}
+        run_hook(self.row, "pre-deploy", self.env)
+
+    def enter_maintenance(self):
+        self.running = running_services(self.row)
+        if self.laravel and self.service in self.running:
+            self.step("Modo mantenimiento (artisan down)")
+            run(compose_args(self.row) + ["exec", "-T", "--user", "33:33", self.service,
+                                          "php", "artisan", "down", "--retry=60"])
+            self.maintenance = True
+
+    def take_backup(self):
+        if self.backup and self.row["database"]["engine"] != "none":
+            self.step("Respaldo de la base del sitio")
+            run([sys.executable, str(ROOT / "scripts/backups.py"), "backup", self.row["domain"]])
+
+    def sync(self):
+        if self.source:
+            self.step(f"Sincronizando código desde {self.source}")
+            composer_runs = self.composer and (self.source / "composer.json").exists()
+            run(rsync_command(self.row, self.source, composer_runs))
+        elif self.ref:
+            self.step(f"Checkout de {self.commit[:12]}")
+            git(app_dir(self.row), "-c", "advice.detachedHead=false", "checkout", "--force", "--detach", self.commit)
+        if self.laravel:
+            fix_owner(self.row)
+            link_public_storage(self.row)
+
+    def dependencies(self):
+        if self.composer and (app_dir(self.row) / "composer.json").exists():
+            self.step("Dependencias (composer)")
+            apply(self.row, composer_plan(self.row, [], self.service))
+
+    def laravel_tasks(self):
+        if not self.laravel:
+            return
+        if self.migrate:
+            self.step("Migraciones")
+            run(artisan(self.row, self.service, "migrate", "--force", deps=True))
+        self.step("Cachés de Laravel (optimize)")
+        run(artisan(self.row, self.service, "optimize", deps=True))
+
+    def restart(self):
+        # Contenedores nuevos: OPcache vacío y workers con el código nuevo.
+        services = services_to_recreate(app_services(self.row), self.running, self.service)
+        self.step("Recreando " + ", ".join(services))
+        run(compose_args(self.row) + ["up", "-d", "--no-build", "--force-recreate", "--wait", *services])
+
+    def leave_maintenance(self):
+        if self.laravel:
+            self.step("Fin del mantenimiento (artisan up)")
+            run(compose_args(self.row) + ["exec", "-T", "--user", "33:33", self.service, "php", "artisan", "up"])
+            self.maintenance = False
+
+    def execute(self):
+        self.prepare()
+        try:
+            self.enter_maintenance()
+            self.take_backup()
+            self.sync()
+            self.dependencies()
+            self.laravel_tasks()
+            self.restart()
+            self.leave_maintenance()
+        except BaseException:
+            if self.maintenance:
+                print(f"El sitio quedó en mantenimiento. Corrige el problema y vuelve a desplegar, o ejecuta: "
+                      f"stack.sh site {self.row['domain']} exec {self.service} php artisan up", file=sys.stderr)
+            raise
+        run_hook(self.row, "post-deploy", self.env)
+        print(f"Despliegue terminado: {self.row['domain']}")
+
+
+def deploy(row, **options):
+    lock_path = ROOT / "sites" / row["domain"] / ".deploy.lock"
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeployError("Ya hay un despliegue en curso para este sitio")
+        Deployment(row, **options).execute()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     commands = p.add_subparsers(dest="action", required=True)
@@ -120,6 +349,16 @@ def main():
     c.add_argument("--service", default="web")
     c.add_argument("--verbose", action="store_true")
     c.add_argument("args", nargs=argparse.REMAINDER)
+    d = commands.add_parser("deploy", help="desplegar código en el sitio")
+    d.add_argument("domain")
+    origin = d.add_mutually_exclusive_group()
+    origin.add_argument("--from", dest="source", metavar="DIR", help="directorio con el código ya subido")
+    origin.add_argument("--ref", help="rama, etiqueta o commit del checkout git en app/")
+    d.add_argument("--skip-backup", action="store_true")
+    d.add_argument("--no-migrate", action="store_true")
+    d.add_argument("--no-composer", action="store_true")
+    d.add_argument("--service", default="web")
+    d.add_argument("--verbose", action="store_true")
     b = commands.add_parser("build", help="construir imágenes mostrando la salida solo si falla")
     b.add_argument("domain")
     b.add_argument("--verbose", action="store_true")
@@ -128,7 +367,10 @@ def main():
         p.error("Ejecutar como root")
     os.umask(0o022)
     row = site(args.domain)
-    if args.action == "build":
+    if args.action == "deploy":
+        deploy(row, source=args.source, ref=args.ref, backup=not args.skip_backup, migrate=not args.no_migrate,
+               composer=not args.no_composer, service=args.service, verbose=args.verbose)
+    elif args.action == "build":
         build_quiet(row, args.verbose)
     elif args.action == "composer":
         extra = args.args[1:] if args.args[:1] == ["--"] else args.args

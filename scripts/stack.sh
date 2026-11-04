@@ -45,7 +45,7 @@ case "$command" in
             echo "Ejecutar primero scripts/provision-host-db.sh $domain" >&2; exit 1
         fi
         case "$kind" in
-            laravel) [[ -f "$app/artisan" && -f "$app/vendor/autoload.php" ]] || { echo 'Importar Laravel y ejecutar composer install primero.' >&2; exit 1; } ;;
+            laravel) [[ -f "$app/artisan" && -f "$app/vendor/autoload.php" ]] || { echo "Importar Laravel y ejecutar primero: stack.sh site-composer $domain (o deploy.sh $domain --from DIR)." >&2; exit 1; } ;;
             wordpress) [[ -f "$app/wp-settings.php" && -f "$app/wp-config.php" ]] || { echo 'Importar WordPress conservando wp-config.php.' >&2; exit 1; } ;;
         esac
         networks

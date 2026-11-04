@@ -13,7 +13,7 @@ sudo ./scripts/backup.sh app.example.com
 
 ## Overlays de Compose
 
-Todos los comandos de DockerWS (`stack.sh`, `backup.sh`, `restore.sh`) cargan `compose.yaml` y después, en orden alfabético, los archivos `compose.d/*.yaml`. Un overlay puede agregar servicios o cambiar un montaje: los volúmenes con el mismo destino se reemplazan y `env_file` se agrega al final. Para ver el resultado combinado:
+Todos los comandos de DockerWS (`stack.sh`, `backup.sh`, `restore.sh`, `deploy.sh`) cargan `compose.yaml` y después, en orden alfabético, los archivos `compose.d/*.yaml`. Un overlay puede agregar servicios o cambiar un montaje: los volúmenes con el mismo destino se reemplazan y `env_file` se agrega al final. Para ver el resultado combinado:
 
 ```bash
 sudo ./scripts/stack.sh site app.example.com config
@@ -75,3 +75,15 @@ sudo ./scripts/stack.sh env-reload app.example.com
 ```
 
 Antes de mover, guarda una copia `runtime.env.FECHA.bak` (`0600`). Se niega a mover credenciales generadas (`APP_KEY`, `DB_*`, salts de WordPress). Nunca imprime valores. Cuando confirmes que todo funciona, borra la copia.
+
+## Despliegue
+
+`deploy.sh` no requiere cambios en el sitio. Prueba primero sin migraciones y revisa la salida:
+
+```bash
+sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.example.com --no-migrate
+```
+
+Si tu proceso actual ejecuta pasos propios (limpiar cachés, publicar assets, notificar), pásalos a `sites/DOMINIO/hooks/pre-deploy` o `post-deploy` (root, `0755`).
+
+Si tu `compose.yaml` editado a mano define el servicio PHP con otro nombre, usa `--service NOMBRE`. Al final se recrean el servicio web, el scheduler y los servicios que ya estaban corriendo. `db` y los servicios detenidos (por ejemplo, un servicio `base` que solo construye la imagen) no se tocan.
