@@ -214,6 +214,17 @@ def parse_ps(output):
     return [json.loads(line) for line in output.splitlines() if line.strip()]
 
 
+def expected_services(config):
+    """Servicios que deben tener contenedor y los que solo construyen una imagen (replicas o scale en 0)."""
+    expected, idle = [], []
+    for name, service in config.get("services", {}).items():
+        replicas = (service.get("deploy") or {}).get("replicas")
+        if replicas is None:
+            replicas = service.get("scale")
+        (idle if replicas is not None and int(replicas) == 0 else expected).append(name)
+    return expected, idle
+
+
 def evaluate(expected, rows):
     """Devuelve [(servicio, estado, ok)] para los servicios esperados."""
     by_service = {r.get("Service"): r for r in rows}
@@ -239,8 +250,11 @@ def status(rows, include_proxy=True):
     targets = [({"domain": "proxy"}, proxy_args())] if include_proxy else []
     targets += [(row, compose_args(row)) for row in rows]
     for row, args in targets:
-        expected = subprocess.run(args + ["config", "--services"], capture_output=True, text=True,
-                                  check=True).stdout.split()
+        config = json.loads(subprocess.run(args + ["config", "--format", "json"], capture_output=True, text=True,
+                                           check=True).stdout)
+        expected, idle = expected_services(config)
+        for service in idle:
+            print(f"-     {row['domain']} {service}: sin réplicas (solo imagen)")
         ps = subprocess.run(args + ["ps", "--all", "--format", "json"], capture_output=True, text=True, check=True).stdout
         for service, label, ok in evaluate(expected, parse_ps(ps)):
             failed |= not ok

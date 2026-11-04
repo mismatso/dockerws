@@ -85,7 +85,7 @@ El servicio se escribe en `sites/DOMINIO/compose.d/50-scheduler.yaml`, un overla
 
 - `site-stop` también detiene el scheduler, y `site-up` lo arranca.
 - La salida de las tareas queda en `stack.sh site DOMINIO logs scheduler`.
-- `stack.sh status` muestra el estado de todos los servicios y termina con código 1 si alguno no está corriendo. Puedes ejecutarlo desde cron o desde tu monitoreo para enterarte si el scheduler se cae.
+- `stack.sh status` muestra el estado de todos los servicios y termina con código 1 si alguno no está corriendo. Los servicios con `replicas: 0` (por ejemplo, uno que solo construye la imagen base) se listan con `-` y no cuentan como caídos. Puedes ejecutarlo desde cron o desde tu monitoreo para enterarte si el scheduler se cae.
 - Las tareas no se ejecutan durante `artisan down`, salvo las marcadas con `evenInMaintenanceMode()`.
 - Para quitarlo: `stack.sh scheduler-disable DOMINIO`.
 

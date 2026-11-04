@@ -50,6 +50,8 @@ MAILTO=root
 
 Recibirás el aviso solo si el host tiene un MTA configurado.
 
+Los servicios con `replicas: 0` o `scale: 0` (por ejemplo, un servicio `base` que solo construye la imagen) se listan con `-` y no cuentan como fallas.
+
 ### `db-import`, respaldo por sitio y `site-up` silencioso
 
 - `stack.sh db-import SITIO archivo.sql[.gz] --confirm-overwrite` reemplaza el `sudo mysql BASE < archivo` manual en la modalidad `host`, y funciona igual en `container`. Ver [respaldos](BACKUPS.md#importar-un-dump-externo).
