@@ -32,7 +32,7 @@ elif [[ $kind != static ]]; then
     if [[ $required == si ]]; then engine="$(choose 'Motor:' mariadb mysql postgres sqlite)"; fi
 fi
 if [[ $engine == sqlite ]]; then
-    mode=file
+    mode="file"
 elif [[ $engine != none ]]; then
     mode="$(choose 'Modalidad: container = instancia dedicada; host = instancia compartida de Debian:' container host)"
 fi
