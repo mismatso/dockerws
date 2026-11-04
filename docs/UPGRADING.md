@@ -86,4 +86,4 @@ Si hoy despliegas con `rsync --rsync-path="sudo rsync"` y `sudo` sin contraseña
 
 ### Releases atómicos
 
-Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). En un sitio con releases, `site-composer` solo admite subcomandos de consulta.
+Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). Opciones nuevas en `config/defaults.json`: `keep_releases` (5) y `node_image`. En un sitio con releases, `site-composer` solo admite subcomandos de consulta.

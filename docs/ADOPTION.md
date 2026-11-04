@@ -100,6 +100,7 @@ Requiere `deploy.sh` y un sitio Laravel o PHP. Revisa antes:
 sudo ./scripts/backup.sh app.example.com
 sudo ./scripts/deploy.sh app.example.com --init-releases
 sudo ./scripts/stack.sh status app.example.com
+sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.example.com --no-migrate
 ```
 
-Para volver atrás con la estructura anterior: `deploy.sh DOMINIO --revert-releases`.
+Si `app/` era un checkout de git, crea el mirror (`git clone --mirror URL sites/DOMINIO/repo.git`) para seguir usando `--ref`. Para volver atrás con la estructura anterior: `deploy.sh DOMINIO --revert-releases`.

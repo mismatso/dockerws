@@ -5,6 +5,7 @@ import datetime as dt
 import fcntl
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -50,11 +51,20 @@ def app_dir(row):
     return path
 
 
-def fix_owner(row):
+def release_mounts(release, writable=False):
+    """Monta un release concreto en lugar del activo (run -v reemplaza el montaje del mismo destino)."""
+    return ["-v", f"{release}:/var/www/html{'' if writable else ':ro'}",
+            "-v", f"{release}/bootstrap/cache:/var/www/html/bootstrap/cache"]
+
+
+def fix_owner(row, release=None):
     """Cede a 33:33 los directorios escribibles de Laravel, sin seguir enlaces simbólicos."""
-    app = app_dir(row)
-    for name in LARAVEL_WRITABLE:
-        folder = app / name
+    if release is None:
+        app = app_dir(row)
+        folders = [app / name for name in LARAVEL_WRITABLE]
+    else:
+        folders = [ROOT / "sites" / row["domain"] / "shared/storage", Path(release) / "bootstrap/cache"]
+    for folder in folders:
         if folder.is_symlink():
             raise ValueError(f"{folder} es un enlace simbólico; no se cambia su propietario")
         folder.mkdir(parents=True, exist_ok=True)
@@ -66,33 +76,37 @@ def fix_owner(row):
                     os.chmod(entry, mode | (0o700 if os.path.isdir(entry) else 0o600))
 
 
-def composer_plan(row, args, service="web"):
-    """Devuelve los pasos: ('run', comando) o ('chown', None). Separado para poder probarlo."""
+def composer_plan(row, args, service="web", release=None):
+    """Devuelve los pasos: ('run', comando) o ('chown', release). Separado para poder probarlo.
+
+    Con release, composer trabaja sobre ese directorio (un release en construcción) y no sobre app/."""
     kind = row["kind"]
     if kind == "static":
         raise ValueError("Un sitio estático no utiliza composer")
     args = list(args) or list(COMPOSER_DEFAULT)
     action = args[0]
     base = compose_args(row) + ["run", "--rm", "--no-deps", "-e", "COMPOSER_HOME=/tmp/composer"]
+    read_mounts = release_mounts(release) if release else []
     if action in COMPOSER_READ:
-        return [("run", base + ["--user", "33:33", service, "composer", *args])]
+        return [("run", base + read_mounts + ["--user", "33:33", service, "composer", *args])]
     if action not in COMPOSER_WRITE:
         raise ValueError(f"Subcomando de composer no admitido: {action}")
-    app = app_dir(row)
+    app = release or app_dir(row)
     cache = COMPOSER_CACHE / row["id"]
     # Root del contenedor no tiene DAC_OVERRIDE: escribe app/ (de root) pero no lee storage/ (33:33).
     # Por eso en Laravel los scripts se ejecutan después, como 33:33.
+    mounts = release_mounts(release, writable=True) if release else ["-v", f"{app}:/var/www/html"]
     write = base + ["--user", "0:0", "-e", "COMPOSER_ALLOW_SUPERUSER=1", "-e", "COMPOSER_CACHE_DIR=/composer-cache",
-                    "-v", f"{app}:/var/www/html", "-v", f"{cache}:/composer-cache", service, "composer", *args]
+                    *mounts, "-v", f"{cache}:/composer-cache", service, "composer", *args]
     if kind != "laravel":
         return [("cache", cache), ("run", write)]
     if "--no-scripts" not in args:
         write.append("--no-scripts")
-    steps = [("cache", cache), ("run", write), ("chown", None)]
+    steps = [("cache", cache), ("run", write), ("chown", release)]
     if "--no-scripts" not in args:
         # post-autoload-dump ejecuta package:discover y solo necesita escribir bootstrap/cache.
-        steps.append(("run", base + ["--user", "33:33", service, "composer", "run-script",
-                                     "post-autoload-dump", "--no-interaction"]))
+        steps.append(("run", base + read_mounts + ["--user", "33:33", service, "composer", "run-script",
+                                                   "post-autoload-dump", "--no-interaction"]))
     return steps
 
 
@@ -101,7 +115,7 @@ def apply(row, steps):
         if kind == "cache":
             value.mkdir(parents=True, mode=0o700, exist_ok=True)
         elif kind == "chown":
-            fix_owner(row)
+            fix_owner(row, value)
         else:
             run(value)
 
@@ -195,14 +209,15 @@ def check_source(row, source):
     return source
 
 
-def rsync_command(row, source, composer_runs):
-    excludes = list(EXCLUDES[row["kind"]])
+def rsync_command(row, source, composer_runs, dest=None):
+    """Sincroniza hacia app/ (con --delete) o hacia un release nuevo y vacío (dest)."""
+    excludes = list(EXCLUDES[row["kind"]]) + ["/" + releases.META]
     if composer_runs:
         excludes.append("/vendor/")
     # Sin -o/-g: los archivos quedan de root. go-w,go+rX: legibles por 33, escribibles solo por root.
-    command = ["rsync", "-rlpt", "--delete", "--chmod=go-w,go+rX"]
+    command = ["rsync", "-rlpt", "--chmod=go-w,go+rX"] + ([] if dest else ["--delete"])
     command += [f"--exclude={item}" for item in excludes]
-    return command + [f"{source}/", f"{ROOT / 'sites' / row['domain'] / 'app'}/"]
+    return command + [f"{source}/", f"{dest or ROOT / 'sites' / row['domain'] / 'app'}/"]
 
 
 def git(app, *args, capture=False):
@@ -282,6 +297,8 @@ class Deployment:
         self.service, self.verbose = service, verbose
         self.laravel = row["kind"] == "laravel"
         self.maintenance = False
+        self.running = []
+        self.backup_path = ""
 
     def step(self, text):
         print(f"==> {text}", flush=True)
@@ -313,7 +330,13 @@ class Deployment:
     def take_backup(self):
         if self.backup and self.row["database"]["engine"] != "none":
             self.step("Respaldo de la base del sitio")
-            run([sys.executable, str(ROOT / "scripts/backups.py"), "backup", self.row["domain"]])
+            result = run([sys.executable, str(ROOT / "scripts/backups.py"), "backup", self.row["domain"]],
+                         stdout=subprocess.PIPE, text=True)
+            output = getattr(result, "stdout", None) or ""
+            print(output, end="", flush=True)
+            prefix = f"OK {self.row['domain']}: "
+            # La ruta queda en los metadatos del release para sugerirla si hay que volver atrás.
+            self.backup_path = next((l[len(prefix):] for l in output.splitlines() if l.startswith(prefix)), "")
 
     def sync(self):
         if self.source:
@@ -374,12 +397,199 @@ class Deployment:
 
 # --- Releases atómicos ----------------------------------------------------------------------
 
+def release_artisan(row, service, release, *args, deps=False):
+    """artisan con un release concreto montado (antes de activarlo), como 33:33."""
+    command = compose_args(row) + ["run", "--rm"] + ([] if deps else ["--no-deps"])
+    return command + release_mounts(release) + ["--user", "33:33", service, "php", "artisan", *args]
+
+
 def history(row, text):
     """Registro de activaciones, con quién las hizo."""
     who = os.environ.get("SUDO_USER") or "root"
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with (releases.releases_dir(row) / "history.log").open("a") as log:
         log.write(f"{stamp} {who} {text}\n")
+
+
+def repo_dir(row):
+    return ROOT / "sites" / row["domain"] / "repo.git"
+
+
+def resolve_mirror_ref(row, ref):
+    repo = repo_dir(row)
+    if not repo.is_dir():
+        raise DeployError("--ref con releases requiere un mirror: git clone --mirror URL sites/DOMINIO/repo.git")
+    git(repo, "fetch", "--prune", "origin")
+    for candidate in (f"refs/heads/{ref}", f"refs/tags/{ref}", ref):
+        result = subprocess.run(["git", "-c", f"safe.directory={repo}", "-C", str(repo), "rev-parse", "--verify",
+                                 "--quiet", candidate + "^{commit}"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    raise DeployError(f"No existe la referencia {ref}")
+
+
+def export_commit(repo, commit, dest):
+    archive = subprocess.Popen(["git", "-c", f"safe.directory={repo}", "-C", str(repo), "archive", "--format=tar", commit],
+                               stdout=subprocess.PIPE)
+    try:
+        subprocess.run(["tar", "-x", "--no-same-owner", "-C", str(dest)], stdin=archive.stdout, check=True)
+    finally:
+        archive.stdout.close()
+        if archive.wait():
+            raise DeployError("git archive falló")
+
+
+class ReleaseDeployment(Deployment):
+    """Construye releases/FECHA sin tocar el sitio, migra con él y lo activa cambiando el enlace app."""
+
+    def __init__(self, row, assets=False, maintenance=True, **options):
+        super().__init__(row, **options)
+        self.assets, self.use_maintenance = assets, maintenance
+        self.pending = self.final = None
+        self.db_touched = self.switched = False
+        self.commit = ""
+
+    def prepare(self):
+        row = self.row
+        releases.clean_pending(row)
+        self.active = releases.current(row)
+        active_dir = releases.path(row, self.active)
+        if self.source:
+            self.source = check_source(row, self.source)
+        if self.ref:
+            self.step(f"Obteniendo {self.ref}")
+            self.commit = resolve_mirror_ref(row, self.ref)
+        self.pending = Path(tempfile.mkdtemp(prefix=".pending-", dir=releases.releases_dir(row)))
+        self.pending.chmod(0o755)
+        self.step("Preparando el release")
+        if self.ref:
+            export_commit(repo_dir(row), self.commit, self.pending)
+        else:
+            # Sin origen se reconstruye a partir del release activo (vendor/ se regenera con composer).
+            origin = self.source or active_dir
+            run(rsync_command(row, origin, self.composer and (origin / "composer.json").exists(), self.pending))
+        self.normalize()
+        self.step("Construyendo la imagen")
+        build_quiet(row, self.verbose)
+        if self.composer and (self.pending / "composer.json").exists():
+            self.step("Dependencias (composer)")
+            apply(row, composer_plan(row, [], self.service, release=self.pending))
+        if self.assets:
+            self.build_assets()
+        self.env = {"DOCKERWS_SITE": row["domain"], "DOCKERWS_APP": str(self.pending),
+                    "DOCKERWS_SOURCE": str(self.source or ""), "DOCKERWS_REF": self.ref or ""}
+        run_hook(row, "pre-deploy", self.env)
+
+    def normalize(self):
+        """El release nunca lleva secretos ni datos: storage/ queda vacío como punto de montaje."""
+        release = self.pending
+        (release / ".env").unlink(missing_ok=True)
+        if (release / ".git").exists():
+            shutil.rmtree(release / ".git")
+        if self.laravel:
+            if (release / "storage").exists() or (release / "storage").is_symlink():
+                if (release / "storage").is_symlink():
+                    (release / "storage").unlink()
+                else:
+                    shutil.rmtree(release / "storage")
+            (release / "storage").mkdir(mode=0o755)
+            (release / "bootstrap/cache").mkdir(parents=True, exist_ok=True)
+            fix_owner(self.row, release)
+            link_public_storage(self.row, release, ROOT / "sites" / self.row["domain"] / "shared/storage")
+
+    def build_assets(self):
+        self.step("Assets (npm ci && npm run build)")
+        # Root sin capabilities: escribe el release (de root) pero nada más del host.
+        run(["docker", "run", "--rm", "--user", "0:0", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+             "-v", f"{self.pending}:/app", "-w", "/app", settings().get("node_image", "node:22-bookworm-slim"),
+             "sh", "-c", "npm ci && npm run build"])
+        if (self.pending / "node_modules").exists():
+            shutil.rmtree(self.pending / "node_modules")
+
+    def enter_maintenance(self):
+        if self.use_maintenance:
+            super().enter_maintenance()
+        else:
+            # Las migraciones deben ser compatibles con el código en línea (expand/contract).
+            self.running = running_services(self.row)
+            self.step("Sin modo mantenimiento (--no-maintenance)")
+
+    def leave_maintenance(self):
+        if self.maintenance:
+            super().leave_maintenance()
+
+    def laravel_tasks(self):
+        if not self.laravel:
+            return
+        if self.migrate:
+            self.step("Migraciones (con el release nuevo, aún sin activar)")
+            self.db_touched = True
+            run(release_artisan(self.row, self.service, self.pending, "migrate", "--force", deps=True))
+        self.step("Cachés de Laravel (optimize) en el release nuevo")
+        run(release_artisan(self.row, self.service, self.pending, "optimize", deps=True))
+
+    def finalize(self):
+        self.name = releases.new_name(self.row)
+        releases.write_meta(self.pending, {
+            "name": self.name, "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "source": str(self.source or ""), "ref": self.ref or "", "commit": self.commit,
+            "previous": self.active, "backup": self.backup_path,
+            "migrations": releases.migration_files(self.pending)})
+        self.final = releases.releases_dir(self.row) / self.name
+        os.rename(self.pending, self.final)
+        self.pending = None
+
+    def activate(self):
+        self.step(f"Activando {self.name}")
+        releases.switch(self.row, self.name)
+        self.switched = True
+        history(self.row, f"deploy {self.active} -> {self.name}")
+
+    def discard(self):
+        for folder in (self.pending, self.final):
+            if folder and folder.exists():
+                shutil.rmtree(folder)
+
+    def recover(self):
+        if self.switched:
+            print(f"El release {self.name} quedó activo, pero el despliegue falló después. El sitio sigue en "
+                  f"mantenimiento. Corrige y vuelve a desplegar, o activa el release anterior.", file=sys.stderr)
+            return
+        self.discard()
+        if self.maintenance and not self.db_touched:
+            try:
+                self.leave_maintenance()
+                print(f"Despliegue cancelado; el sitio sigue en línea con {self.active}.", file=sys.stderr)
+            except subprocess.CalledProcessError:
+                pass
+        elif self.maintenance:
+            hint = f" o restaura {self.backup_path}" if self.backup_path else ""
+            print(f"Las migraciones pudieron quedar a medias: el sitio sigue en mantenimiento con {self.active}. "
+                  f"Corrige y vuelve a desplegar{hint}.", file=sys.stderr)
+
+    def execute(self):
+        try:
+            self.prepare()
+        except BaseException:
+            self.discard()
+            raise
+        try:
+            self.enter_maintenance()
+            self.take_backup()
+            self.laravel_tasks()
+            self.finalize()
+            self.activate()
+            self.restart()
+            self.leave_maintenance()
+        except BaseException:
+            self.recover()
+            raise
+        self.env["DOCKERWS_APP"] = str(self.final)
+        run_hook(self.row, "post-deploy", self.env)
+        removed = releases.prune(self.row, int(settings().get("keep_releases", 5)))
+        if removed:
+            print("Releases eliminados: " + ", ".join(removed))
+        print(f"Despliegue terminado: {self.row['domain']} ({self.name})")
 
 
 def recreate(row, service, running):
@@ -445,6 +655,9 @@ def init_releases(row, service="web"):
               f"stack.sh site {row['domain']} exec {service} php artisan up", file=sys.stderr)
         raise
     history(row, f"init {name}")
+    if (release / ".git").is_dir() and not repo_dir(row).exists():
+        print(f"Nota: app/ era un checkout de git. Para --ref con releases crea el mirror:\n"
+              f"  git clone --mirror URL_DEL_REPOSITORIO {repo_dir(row)}")
     print(f"Releases inicializados: app -> releases/{name}")
 
 
@@ -476,7 +689,7 @@ def revert_releases(row, service="web"):
           "bórralos cuando ya no los necesites.")
 
 
-def deploy(row, init=False, revert=False, **options):
+def deploy(row, init=False, revert=False, assets=False, maintenance=True, **options):
     uid = sudo_uid()
     if uid is not None:
         if init or revert:
@@ -495,7 +708,10 @@ def deploy(row, init=False, revert=False, **options):
         elif revert:
             revert_releases(row, service)
         elif releases.enabled(row):
-            raise DeployError("Esta versión todavía no despliega sitios con releases; usa --revert-releases")
+            ReleaseDeployment(row, assets=assets, maintenance=maintenance, **options).execute()
+        elif assets or not maintenance:
+            raise DeployError("--assets y --no-maintenance requieren releases: sin ellos el código en uso se "
+                              "modifica en su lugar")
         else:
             Deployment(row, **options).execute()
 
@@ -512,9 +728,12 @@ def main():
     d.add_argument("domain")
     origin = d.add_mutually_exclusive_group()
     origin.add_argument("--from", dest="source", metavar="DIR", help="directorio con el código ya subido")
-    origin.add_argument("--ref", help="rama, etiqueta o commit del checkout git en app/")
+    origin.add_argument("--ref", help="rama, etiqueta o commit (checkout en app/ o mirror repo.git con releases)")
     origin.add_argument("--init-releases", action="store_true", help="convertir el sitio a releases atómicos")
     origin.add_argument("--revert-releases", action="store_true", help="volver a app/ como directorio")
+    d.add_argument("--assets", action="store_true", help="con releases: npm ci && npm run build en el release")
+    d.add_argument("--no-maintenance", action="store_true",
+                   help="con releases: sin artisan down (migraciones compatibles con el código en línea)")
     d.add_argument("--skip-backup", action="store_true")
     d.add_argument("--no-migrate", action="store_true")
     d.add_argument("--no-composer", action="store_true")
@@ -530,7 +749,7 @@ def main():
     row = site(args.domain)
     if args.action == "deploy":
         deploy(row, init=args.init_releases, revert=args.revert_releases,
-               source=args.source, ref=args.ref, backup=not args.skip_backup,
+               assets=args.assets, maintenance=not args.no_maintenance, source=args.source, ref=args.ref, backup=not args.skip_backup,
                migrate=not args.no_migrate, composer=not args.no_composer, service=args.service, verbose=args.verbose)
     elif args.action == "build":
         build_quiet(row, args.verbose)

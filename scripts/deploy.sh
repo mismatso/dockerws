@@ -4,8 +4,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 require_root
 [[ ${1:-} && ${1:-} != -* ]] || {
     cat >&2 <<'EOF'
-Uso: deploy.sh DOMINIO [--from DIR | --ref REF] [--skip-backup] [--no-migrate] [--no-composer]
-                       [--service web] [--verbose]
+Uso: deploy.sh DOMINIO [--from DIR | --ref REF] [--skip-backup] [--no-migrate] [--no-composer] [--assets]
+                       [--no-maintenance] [--service web] [--verbose]
      deploy.sh DOMINIO --init-releases | --revert-releases
 EOF
     exit 1

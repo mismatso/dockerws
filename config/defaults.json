@@ -11,5 +11,7 @@
   "backup_dir": "/var/backups/dockerws",
   "retention_days": 30,
   "backup_timeout": 1800,
-  "deploy_incoming_dir": "/srv/dockerws/incoming"
+  "deploy_incoming_dir": "/srv/dockerws/incoming",
+  "keep_releases": 5,
+  "node_image": "node:22-bookworm-slim"
 }

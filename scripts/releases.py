@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 from registry import ROOT
 
@@ -100,11 +101,53 @@ def write_meta(folder, data):
     os.replace(temp, file)
 
 
+def previous(row):
+    """Release anterior al activo: el registrado al desplegar o, si no existe, el más reciente más viejo."""
+    active = current(row)
+    recorded = read_meta(row, active).get("previous")
+    available = names(row)
+    if recorded in available and recorded != active:
+        return recorded
+    older = [n for n in available if n < active]
+    if not older:
+        raise ValueError("No hay un release anterior al activo")
+    return older[-1]
+
+
 def migration_files(folder):
     """Migraciones que conoce un release: database/migrations y las que traen sus paquetes."""
     folder = Path(folder)
     files = list(folder.glob("database/migrations/*.php")) + list(folder.glob("vendor/*/*/database/migrations/*.php"))
     return sorted({f.stem for f in files})
+
+
+def prune(row, keep):
+    """Borra releases viejos: conserva los `keep` más recientes, el activo y su anterior."""
+    if keep < 2:
+        raise ValueError("keep_releases debe ser al menos 2")
+    available = names(row)
+    protected = set(available[-keep:])
+    if enabled(row):
+        active = current(row)
+        protected.add(active)
+        try:
+            protected.add(previous(row))
+        except ValueError:
+            pass
+    removed = []
+    for name in available:
+        if name not in protected:
+            shutil.rmtree(releases_dir(row) / name)
+            removed.append(name)
+    return removed
+
+
+def clean_pending(row):
+    folder = releases_dir(row)
+    if folder.is_dir():
+        for item in folder.glob(".pending-*"):
+            if item.is_dir() and not item.is_symlink():
+                shutil.rmtree(item)
 
 
 # --- Overlay de storage compartido ----------------------------------------------------------

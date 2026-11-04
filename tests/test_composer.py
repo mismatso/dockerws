@@ -77,7 +77,7 @@ class ComposerTests(SiteTestCase):
         order = []
         with patch.object(deploy, "build_quiet"), \
                 patch.object(deploy, "run", side_effect=lambda c: order.append("33" if "33:33" in c else "root")), \
-                patch.object(deploy, "fix_owner", side_effect=lambda r: order.append("chown")), \
+                patch.object(deploy, "fix_owner", side_effect=lambda r, release=None: order.append("chown")), \
                 patch.object(deploy, "COMPOSER_CACHE", self.root / "cache"):
             deploy.composer(row, [])
         self.assertEqual(order, ["root", "chown", "33"])

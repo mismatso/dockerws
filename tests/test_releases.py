@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Releases atómicos: estructura y adopción."""
+"""Releases atómicos: estructura, despliegue y adopción."""
 import json
 import os
 import shutil
@@ -138,22 +138,119 @@ class ReleaseTests(SiteTestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 releases.switch(self.row, bad)
 
+    # --- Despliegue -------------------------------------------------------------------------
+
+    def test_release_deploy_migrates_before_activating(self):
+        initial = self.init()
+        new = self.deploy("v2", ["2024_01_01_000000_create_users", "2024_06_01_000000_add_phone"])
+        self.assertNotEqual(new, initial)
+        calls = self.recorder.calls
+        # Composer, migraciones y optimize trabajan sobre el release nuevo con el enlace aún en el anterior.
+        for fragment in ("--no-scripts", "artisan migrate --force", "artisan optimize"):
+            self.assertEqual(self.recorder.target_at(fragment), f"releases/{initial}", fragment)
+            self.assertIn("/releases/.pending-", next(c for c in calls if fragment in c))
+        self.assertEqual(self.recorder.target_at("--force-recreate"), f"releases/{new}")
+        order = [next(i for i, c in enumerate(calls) if f in c) for f in
+                 ("--no-scripts", "artisan down", "backup", "artisan migrate", "artisan optimize", "force-recreate", "artisan up")]
+        self.assertEqual(order, sorted(order), calls)
+        release = self.site / "releases" / new
+        self.assertIn("v2", (release / "public/index.php").read_text())
+        self.assertFalse((release / ".env").exists())
+        self.assertEqual(list((release / "storage").iterdir()), [])
+        self.assertEqual(os.readlink(release / "public/storage"), "../storage/app/public")
+        meta = releases.read_meta(self.row, new)
+        self.assertEqual(meta["previous"], initial)
+        self.assertEqual(meta["backup"], BACKUP)
+        self.assertIn("2024_06_01_000000_add_phone", meta["migrations"])
+        # El release anterior queda intacto.
+        self.assertIn("v1", (self.site / "releases" / initial / "public/index.php").read_text())
+
+    def test_failure_before_maintenance_discards_release(self):
+        initial = self.init()
+        self.recorder.fail_on = "--no-scripts"
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.deploy("v2", [])
+        self.assertEqual(releases.current(self.row), initial)
+        self.assertEqual(releases.names(self.row), [initial])
+        self.assertFalse(list((self.site / "releases").glob(".pending-*")))
+        self.assertFalse(any("artisan down" in c for c in self.recorder.calls))
+
+    def test_failure_after_down_without_migrations_brings_site_back(self):
+        initial = self.init()
+        self.recorder.fail_on = "backup"
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.deploy("v2", [])
+        self.assertEqual(releases.current(self.row), initial)
+        self.assertTrue(self.recorder.calls[-1].endswith("artisan up"))
+
+    def test_failed_migration_keeps_maintenance_and_old_release(self):
+        initial = self.init()
+        self.recorder.fail_on = "artisan migrate"
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.deploy("v2", [])
+        self.assertEqual(releases.current(self.row), initial)
+        self.assertEqual(releases.names(self.row), [initial])
+        self.assertFalse(any(c.endswith("artisan up") for c in self.recorder.calls))
+
+    def test_prune_keeps_recent_active_and_previous(self):
+        self.init()
+        base = self.site / "releases"
+        for day in range(1, 9):
+            (base / f"202611{day:02d}T000000Z").mkdir()
+        releases.switch(self.row, "20261102T000000Z")
+        releases.write_meta(base / "20261102T000000Z", {"previous": "20261101T000000Z"})
+        removed = releases.prune(self.row, 3)
+        remaining = releases.names(self.row)
+        self.assertIn("20261102T000000Z", remaining)
+        self.assertIn("20261101T000000Z", remaining)
+        self.assertEqual(remaining[-3:], ["20261106T000000Z", "20261107T000000Z", "20261108T000000Z"])
+        self.assertTrue(removed)
+        with self.assertRaises(ValueError):
+            releases.prune(self.row, 1)
+
+    def test_git_ref_uses_mirror_and_never_ships_secrets(self):
+        self.init()
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+        def git(*args, cwd=None):
+            return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
+
+        work = self.source("v3", ["2024_01_01_000000_create_users"])
+        git("init", "-q", "-b", "main", cwd=work)
+        git("add", "-A", cwd=work)
+        git("commit", "-qm", "v3", cwd=work)
+        origin = self.root / "origin.git"
+        git("clone", "-q", "--bare", str(work), str(origin))
+        git("clone", "-q", "--mirror", str(origin), str(self.site / "repo.git"))
+        with patch.object(releases, "new_name", return_value="20261104T000003Z"):
+            deploy.deploy(self.row, ref="main")
+        release = self.site / "releases/20261104T000003Z"
+        self.assertIn("v3", (release / "public/index.php").read_text())
+        self.assertFalse((release / ".env").exists())
+        self.assertFalse((release / ".git").exists())
+        self.assertEqual(list((release / "storage").iterdir()), [])
+        self.assertEqual(len(releases.read_meta(self.row, "20261104T000003Z")["commit"]), 40)
+
     # --- Sitios sin releases ----------------------------------------------------------------
 
     def test_in_place_sites_reject_release_options(self):
-        self.init()
         with self.assertRaises(deploy.DeployError):
-            deploy.deploy(self.row)
-        with patch.dict(os.environ, {"SUDO_UID": "1001", "SUDO_USER": "deploy"}):
-            for options in ({"init": True}, {"revert": True}):
-                with self.subTest(options=options), self.assertRaises(deploy.DeployError):
-                    deploy.deploy(self.row, **options)
+            deploy.deploy(self.row, assets=True)
+        with self.assertRaises(deploy.DeployError):
+            deploy.deploy(self.row, maintenance=False)
+        self.init()
         with self.assertRaises(ValueError):
             deploy.composer_plan(self.row, ["install"])
         with patch.object(deploy, "apply") as apply:
             deploy.composer(self.row, ["show"])
         self.assertEqual(len(apply.call_args.args[1]), 1)
 
+    def test_no_maintenance_skips_down_and_up(self):
+        self.init()
+        self.deploy("v2", [], maintenance=False)
+        self.assertFalse(any("artisan down" in c or c.endswith("artisan up") for c in self.recorder.calls))
+        self.assertTrue(any("artisan migrate" in c for c in self.recorder.calls))
 
 
 if __name__ == "__main__":

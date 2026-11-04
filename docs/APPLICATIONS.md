@@ -172,13 +172,13 @@ El usuario de despliegue no escribe en `sites/`, `app/`, `runtime.env` ni `secre
 
 Límite de confianza: quien despliega decide el código que se ejecuta como UID 33 en el contenedor, y los scripts de composer, que corren en un contenedor temporal como root sin capabilities con `app/` escribible. Es el mismo nivel de confianza de cualquier despliegue, pero ya sin root en el host.
 
-Hoy el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Los [releases atómicos](#releases-atómicos) preparan la estructura para activar el código nuevo de una vez; `deploy.sh` los desplegará en una próxima versión.
+Sin releases, el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Con [releases atómicos](#releases-atómicos) el código nuevo se prepara aparte y se activa de una vez.
 
 Con sudo no se permiten `--init-releases` ni `--revert-releases`.
 
 ### Releases atómicos
 
-Opcional. Cada release es un directorio propio y `app` pasa a ser un enlace al release activo:
+Opcional. Cada despliegue crea un directorio nuevo y `app` pasa a ser un enlace al release activo:
 
 ```text
 sites/DOMINIO/
@@ -188,6 +188,7 @@ sites/DOMINIO/
     20261104T063322Z/     Código (root), vendor/, bootstrap/cache (33:33), storage/ vacío
     history.log           Activaciones, con el usuario que las hizo
   shared/storage/         storage/ de Laravel, común a todos los releases
+  repo.git/               Mirror opcional para --ref
   compose.d/90-releases.yaml
 ```
 
@@ -199,7 +200,30 @@ sudo ./scripts/deploy.sh app.example.com --init-releases
 
 Mueve `app/` a `releases/FECHA` y `app/storage` a `shared/storage`, crea el enlace y el overlay `90-releases.yaml` (que monta `shared/storage` en los servicios de `compose.yaml`), actualiza los overlays de workers de DockerWS (`50-*.yaml`) y recrea los servicios. Si algo falla, deshace cada paso. `--revert-releases` vuelve a la estructura anterior con el release activo; los demás quedan en `releases/` para que los borres a mano.
 
-**Composer:** los releases no se modifican en su lugar. `site-composer` solo admite subcomandos de consulta (`show`, `outdated`, `audit`…).
+Con releases, `deploy.sh` admite los mismos orígenes y opciones:
+
+1. **Con el sitio en línea:** copia el origen a `releases/.pending-*` (o exporta el commit con `git archive` desde `repo.git`), quita `.env`, `.git/` y `storage/`, ejecuta composer sobre ese directorio, compila assets si se pidió `--assets` y ejecuta el gancho `pre-deploy`. Si algo falla, se descarta el directorio y el sitio no se entera.
+2. `artisan down` y respaldo de la base.
+3. `migrate --force` y `optimize` con el release nuevo montado en un contenedor temporal, mientras `app` sigue apuntando al anterior.
+4. Renombra el release, guarda sus metadatos (`.dockerws-release.json`: origen, commit, release anterior, respaldo y migraciones) y cambia el enlace con un `rename` atómico.
+5. Recrea los servicios, `artisan up`, gancho `post-deploy` y limpieza: se conservan los últimos `keep_releases` (5), más el activo y el anterior.
+
+Si falla antes de migrar, el sitio vuelve solo a estar en línea con el release anterior. Si falla en las migraciones, queda en mantenimiento con el release anterior, para que decidas si corregir y redesplegar o restaurar el respaldo.
+
+**`--ref` con releases** usa un mirror en lugar de un checkout en `app/`:
+
+```bash
+sudo git clone --mirror git@github.com:example/app.git /opt/dockerws/sites/app.example.com/repo.git
+sudo ./scripts/deploy.sh app.example.com --ref main
+```
+
+**Sin mantenimiento:** `--no-maintenance` omite `artisan down`. Úsalo solo si las migraciones son compatibles con el código que sigue en línea (agregar tablas o columnas con valor por omisión, no renombrar ni borrar): durante unos segundos, el código anterior trabaja con la base ya migrada.
+
+**Assets:** `--assets` ejecuta `npm ci && npm run build` en el release en construcción, con la imagen `node_image` (por defecto `node:22-bookworm-slim`), como root sin capabilities, y borra `node_modules/` al terminar. Sin releases, compila los assets fuera del servidor.
+
+**Composer:** los releases no se modifican en su lugar. `site-composer` solo admite subcomandos de consulta (`show`, `outdated`, `audit`…); para cambiar dependencias, actualiza `composer.lock` en el origen y despliega.
+
+**Tiempo fuera de servicio:** igual que sin releases, el mantenimiento dura lo que el respaldo, las migraciones y la recreación de los contenedores (unos segundos en un sitio pequeño). Mientras se recrea `web`, el proxy puede responder 502 durante unos instantes. Composer, la copia del código y los assets ya no forman parte de esa ventana.
 
 ## WordPress
 
