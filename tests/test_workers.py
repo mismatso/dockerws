@@ -173,6 +173,13 @@ class SchedulerTests(SiteTestCase):
         self.assertEqual(workers.parse_ps('[{"Service":"web","State":"running"}]')[0]["Service"], "web")
         self.assertEqual(workers.evaluate(["web"], [{"Service": "web", "State": "running", "Health": "unhealthy"}])[0][2], False)
 
+    def test_status_ignores_services_without_replicas(self):
+        config = {"services": {"base": {"image": "example/base", "deploy": {"replicas": 0}},
+                               "assets": {"image": "example/base", "scale": 0},
+                               "web": {"image": "example/base"},
+                               "worker": {"image": "example/base", "deploy": {"replicas": 2}}}}
+        self.assertEqual(workers.expected_services(config), (["web", "worker"], ["base", "assets"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,7 +48,10 @@ class ReleaseTests(SiteTestCase):
         (self.site / "app/storage/logs/laravel.log").write_text("datos de producción\n")
         self.recorder = ReleaseRecorder(self.site)
         self.applied = ["2024_01_01_000000_create_users"]
-        for item in [patch.object(deploy, "run", self.recorder), patch.object(deploy, "build_quiet"),
+        sudoers = self.root / "sudoers.d"
+        sudoers.mkdir()
+        (sudoers / "dockerws-deploy-deploy").write_text("")
+        for item in [patch.object(deploy, "SUDOERS_DIR", sudoers), patch.object(deploy, "run", self.recorder), patch.object(deploy, "build_quiet"),
                      patch.object(deploy, "fix_owner"), patch("builtins.print"),
                      patch.object(deploy, "running_services", return_value=["db", "web", "scheduler"]),
                      patch.object(deploy, "app_services", return_value=["db", "web", "scheduler"]),
@@ -296,6 +299,15 @@ class ReleaseTests(SiteTestCase):
             with self.assertRaises(deploy.DeployError) as error:
                 deploy.deploy(self.row, rollback="")
             self.assertIn("deploy_user_rollback", str(error.exception))
+
+    def test_admin_with_full_sudo_is_root(self):
+        # sudo, sudo -i y sudo su conservan SUDO_UID; sin la regla de despliegue se trata como root.
+        with patch.dict(os.environ, {"SUDO_UID": "1000", "SUDO_USER": "admin"}), \
+                patch("workers.resolved", return_value=self.config()):
+            deploy.deploy(self.row, init=True)
+            self.assertTrue(releases.enabled(self.row))
+            deploy.deploy(self.row, revert=True)
+        self.assertFalse(releases.enabled(self.row))
 
     def test_in_place_sites_reject_release_options(self):
         with self.assertRaises(ValueError):

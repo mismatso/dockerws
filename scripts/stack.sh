@@ -146,7 +146,16 @@ case "$command" in
         ;;
     status) python3 "$DOCKERWS_ROOT/scripts/workers.py" status ${2:+"$2"} ;;
     site-stop) site_compose "${2:?Falta dominio}" stop ;;
-    site) domain="${2:?Falta dominio}"; shift 2; site_compose "$domain" "$@" ;;
+    site)
+        domain="${2:?Falta dominio}"
+        shift 2
+        # El sistema de archivos de los contenedores es de solo lectura y HOME (/var/www) no se puede escribir:
+        # herramientas como artisan tinker (psysh) necesitan un HOME escribible. /tmp es tmpfs.
+        if [[ ${1:-} == exec || ${1:-} == run ]]; then
+            set -- "$1" -e HOME=/tmp "${@:2}"
+        fi
+        site_compose "$domain" "$@"
+        ;;
     proxy) shift; proxy_compose "$@" ;;
     list) python3 "$DOCKERWS_ROOT/scripts/registry.py" list ;;
     validate)

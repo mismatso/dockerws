@@ -85,7 +85,7 @@ El servicio se escribe en `sites/DOMINIO/compose.d/50-scheduler.yaml`, un overla
 
 - `site-stop` también detiene el scheduler, y `site-up` lo arranca.
 - La salida de las tareas queda en `stack.sh site DOMINIO logs scheduler`.
-- `stack.sh status` muestra el estado de todos los servicios y termina con código 1 si alguno no está corriendo. Puedes ejecutarlo desde cron o desde tu monitoreo para enterarte si el scheduler se cae.
+- `stack.sh status` muestra el estado de todos los servicios y termina con código 1 si alguno no está corriendo. Los servicios con `replicas: 0` (por ejemplo, uno que solo construye la imagen base) se listan con `-` y no cuentan como caídos. Puedes ejecutarlo desde cron o desde tu monitoreo para enterarte si el scheduler se cae.
 - Las tareas no se ejecutan durante `artisan down`, salvo las marcadas con `evenInMaintenanceMode()`.
 - Para quitarlo: `stack.sh scheduler-disable DOMINIO`.
 
@@ -161,7 +161,9 @@ rsync -az --delete --exclude .git --exclude node_modules ./ deploy@servidor:/srv
 ssh deploy@servidor sudo /opt/dockerws/scripts/deploy.sh app.example.com
 ```
 
-Cuando `deploy.sh` se invoca con sudo desde un usuario que no es root:
+Las restricciones siguientes se aplican solo a quien tiene la regla `/etc/sudoers.d/dockerws-deploy-USUARIO`. Un administrador con sudo completo (`sudo`, `sudo -i` o `sudo su`) se trata como root, aunque conserve `SUDO_UID`. Si un administrador tiene además una regla de despliegue, queda limitado; para operar como root, usa `sudo su -`.
+
+Cuando el usuario de despliegue invoca `deploy.sh` con sudo:
 
 - el único origen admitido es su carpeta de subida (`--from` se puede omitir);
 - `--ref` sigue disponible;
@@ -174,7 +176,7 @@ Límite de confianza: quien despliega decide el código que se ejecuta como UID 
 
 Sin releases, el rsync reemplaza archivos mientras Apache atiende peticiones, aunque con la aplicación en mantenimiento. Con [releases atómicos](#releases-atómicos) el código nuevo se prepara aparte y se activa de una vez.
 
-Con sudo no se permiten `--init-releases`, `--revert-releases` ni `--force`. `--rollback` sí está permitido: el usuario de despliegue ya decide qué código se publica, así que volver a un release anterior no le da un privilegio nuevo y permite reaccionar rápido ante un incidente. La comprobación de migraciones se aplica igual. Si la base tiene migraciones que el release destino no conoce, la vuelta atrás requiere `--force`, y esa decisión queda en manos de root. Para que solo root pueda volver atrás, pon `"deploy_user_rollback": false` en `config/local.json`.
+Al usuario de despliegue no se le permiten `--init-releases`, `--revert-releases` ni `--force`. `--rollback` sí está permitido: el usuario de despliegue ya decide qué código se publica, así que volver a un release anterior no le da un privilegio nuevo y permite reaccionar rápido ante un incidente. La comprobación de migraciones se aplica igual. Si la base tiene migraciones que el release destino no conoce, la vuelta atrás requiere `--force`, y esa decisión queda en manos de root. Para que solo root pueda volver atrás, pon `"deploy_user_rollback": false` en `config/local.json`.
 
 ### Releases atómicos
 

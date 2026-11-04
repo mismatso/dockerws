@@ -50,6 +50,8 @@ MAILTO=root
 
 Recibirás el aviso solo si el host tiene un MTA configurado.
 
+Los servicios con `replicas: 0` o `scale: 0` (por ejemplo, un servicio `base` que solo construye la imagen) se listan con `-` y no cuentan como fallas.
+
 ### `db-import`, respaldo por sitio y `site-up` silencioso
 
 - `stack.sh db-import SITIO archivo.sql[.gz] --confirm-overwrite` reemplaza el `sudo mysql BASE < archivo` manual en la modalidad `host`, y funciona igual en `container`. Ver [respaldos](BACKUPS.md#importar-un-dump-externo).
@@ -87,3 +89,27 @@ Si hoy despliegas con `rsync --rsync-path="sudo rsync"` y `sudo` sin contraseña
 ### Releases atómicos y `--rollback`
 
 Opcional. Los sitios con `app/` como directorio siguen desplegándose igual. Para adoptarlo: `deploy.sh DOMINIO --init-releases` (ver [Releases atómicos](ADOPTION.md#releases-atómicos)). Opciones nuevas en `config/defaults.json`: `keep_releases` (5), `deploy_user_rollback` (`true`: el usuario de despliegue puede usar `--rollback` sin `--force`) y `node_image`. En un sitio con releases, `site-composer` solo admite subcomandos de consulta.
+
+### Administradores con sudo completo en `deploy.sh`
+
+Antes, `deploy.sh` trataba como usuario de despliegue a cualquiera que lo invocara con sudo (también con `sudo -i` o `sudo su`). Ahora solo limita a quien tiene la regla `/etc/sudoers.d/dockerws-deploy-USUARIO` que crea `host/install-deploy-user.sh`. Un administrador puede usar `--init-releases`, `--force`, `--skip-backup` y `--from` con cualquier origen sin abrir `sudo su -`. No requiere acción.
+
+### `php.ini-production` en la imagen PHP
+
+La imagen parte ahora de `php.ini-production`, y `images/php-apache/php.ini` se aplica encima. Cambian, entre otros, `short_open_tag=Off`, `error_reporting` (sin avisos de obsolescencia) y `zend.assertions=-1`. `variables_order` se mantiene en `EGPCS`, así que `$_ENV` sigue disponible. Se aplica al reconstruir (`stack.sh site-up SITIO` o el siguiente `deploy.sh`). Antes, comprueba que el código no use etiquetas `<?` cortas:
+
+```bash
+grep -rlE '<\?($|[[:space:]])' --include='*.php' /opt/dockerws/sites/app.example.com/app | grep -v /vendor/
+```
+
+Si una aplicación antigua las necesita, agrega `short_open_tag=On` a `images/php-apache/php.ini`. Ese cambio afecta a todos los sitios.
+
+### `HOME` en `stack.sh site … exec` y `run`
+
+`stack.sh site SITIO exec|run …` pasa `-e HOME=/tmp`. El sistema de archivos del contenedor es de solo lectura, y herramientas como `artisan tinker` necesitan un `HOME` escribible:
+
+```bash
+sudo ./scripts/stack.sh site app.example.com exec web php artisan tinker
+```
+
+Para usar otro valor, pasa `-e HOME=…` después; Docker usa el último.
