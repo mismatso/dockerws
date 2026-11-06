@@ -1,9 +1,9 @@
-ARG PHP_IMAGE=php:8.4-apache-bookworm
+ARG PHP_IMAGE=php:8.4-apache-trixie
 FROM ${PHP_IMAGE}
 
 RUN apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends \
-       libicu-dev libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
+       libicu-dev libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype-dev \
        libonig-dev libpq-dev libsqlite3-dev unzip \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j2 pdo_mysql mysqli pdo_pgsql pdo_sqlite mbstring intl zip gd bcmath \
