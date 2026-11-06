@@ -181,6 +181,7 @@ sudo ./scripts/stack.sh env-reload app.example.com     # Tras editar app.env o r
 sudo ./scripts/stack.sh db-up example.com
 sudo ./scripts/stack.sh db-import example.com dump.sql.gz --confirm-overwrite
 sudo ./scripts/stack.sh site-stop example.com
+sudo ./scripts/stack.sh site-rename example.com       # Sitio antiguo → nombres legibles (plan; --apply)
 sudo ./scripts/stack.sh proxy logs --tail=100
 ```
 

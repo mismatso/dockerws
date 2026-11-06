@@ -146,6 +146,11 @@ case "$command" in
         ;;
     status) python3 "$DOCKERWS_ROOT/scripts/workers.py" status ${2:+"$2"} ;;
     site-stop) site_compose "${2:?Falta dominio}" stop ;;
+    site-rename)
+        require_root
+        shift
+        exec python3 "$DOCKERWS_ROOT/scripts/rename.py" "$@"
+        ;;
     site)
         domain="${2:?Falta dominio}"
         shift 2
@@ -173,6 +178,7 @@ Uso: stack.sh COMANDO [ARGUMENTOS]
   proxy-up [--recreate]             Regenerar la configuración, conectar redes y recargar Nginx
   site-up DOMINIO [--verbose]       Construir y arrancar un sitio
   site-stop DOMINIO                 Detener todos los servicios del sitio
+  site-rename DOMINIO [--apply|--drop-old] [--containers-only]  Pasar un sitio antiguo a nombres legibles
   db-up DOMINIO                     Arrancar solo la base dedicada
   db-import DOMINIO ARCHIVO.sql[.gz] --confirm-overwrite
   site-composer DOMINIO [--service S] [SUBCOMANDO OPCIONES...]

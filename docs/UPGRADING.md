@@ -139,7 +139,7 @@ Los sitios nuevos toman su ID y el nombre de su base del dominio, con un sufijo 
 
 Antes eran `dockerws-sHASH-web-1` y `dwsHASH`, con 12 caracteres hexadecimales.
 
-Los sitios existentes no cambian y no requieren acción. `site.json` guarda el ID y la base, y `compose.yaml` conserva el nombre del proyecto (`dockerws-ID`). Renombrarlos implicaría contenedores, redes y volúmenes nuevos, además de volcar y restaurar la base.
+Los sitios existentes no cambian y no requieren acción. `site.json` guarda el ID y la base, y `compose.yaml` conserva el nombre del proyecto (`dockerws-ID`). Para pasarlos a los nombres nuevos, usa `stack.sh site-rename` (ver [Adopción › Nombres legibles](ADOPTION.md#nombres-legibles)).
 
 Para saber a qué sitio pertenece cada contenedor existente:
 

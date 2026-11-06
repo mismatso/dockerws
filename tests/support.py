@@ -16,7 +16,7 @@ import scaffold  # noqa: E402
 
 # Cada módulo enlaza su propio nombre ROOT al importarlo; se parchean todos.
 MODULES = ("registry", "scaffold", "database", "backups", "provision_host_db",
-           "workers", "deploy", "envfiles", "acme_check", "releases")
+           "workers", "deploy", "envfiles", "acme_check", "releases", "rename")
 
 
 class SiteTestCase(unittest.TestCase):
