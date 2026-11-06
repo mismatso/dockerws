@@ -104,3 +104,62 @@ sudo ./scripts/deploy.sh app.example.com --from /srv/dockerws/incoming/app.examp
 ```
 
 Si `app/` era un checkout de git, crea el mirror (`git clone --mirror URL sites/DOMINIO/repo.git`) para seguir usando `--ref`. Para volver atrás con la estructura anterior: `deploy.sh DOMINIO --revert-releases`.
+
+## Nombres legibles
+
+Opcional. Pasa un sitio creado con versiones anteriores a los nombres que se derivan del dominio:
+
+- **contenedores e imágenes:** `dockerws-sHASH-*` → `dws-app-example-com-2805-*`;
+- **base y usuario** (MySQL y MariaDB): `dwsHASH` → `dws_app_example_com_2805`.
+
+El ID de `site.json`, las redes del proxy y el alias `web-ID` no cambian: no se ven en `docker ps` y el proxy sigue igual. Antes de empezar, actualiza DockerWS en el servidor; las versiones anteriores no aceptan `_` en el nombre de la base.
+
+```bash
+sudo ./scripts/stack.sh site-rename app.example.com            # Solo muestra el plan
+sudo ./scripts/stack.sh site-rename app.example.com --apply    # Corte breve del sitio
+sudo ./scripts/stack.sh status app.example.com
+```
+
+Sin `--apply` no cambia nada: muestra qué se renombra y avisa si un archivo de cron menciona el nombre viejo.
+
+`--apply`, en orden:
+
+1. Guarda una copia de `site.json`, `compose.yaml`, `compose.d/`, `runtime.env`, `app.env` y `secrets/init.sql` en `.rename-antes.tgz`.
+2. Cambia el nombre del proyecto en `compose.yaml` y `compose.d/`, incluidas las imágenes que lo usan (por ejemplo, el scheduler o un servicio `base`). Los volúmenes del proyecto viejo se declaran `external` con su nombre actual, así que los datos no se mueven.
+3. Construye las imágenes con el nombre nuevo mientras el sitio sigue en línea.
+4. Comienza el corte: quita los contenedores viejos.
+5. Con base MySQL o MariaDB:
+   - hace un respaldo con `backup.sh`;
+   - crea la base y el usuario nuevos con la misma contraseña;
+   - actualiza `DB_DATABASE` y `DB_USERNAME`;
+   - importa el respaldo y compara la cantidad de tablas.
+6. Arranca el sitio (si estaba en marcha) y, en Laravel con la configuración en caché, ejecuta `config:cache`.
+
+Si algo falla, vuelve solo al estado anterior: borra la base y el usuario nuevos, restaura los archivos y arranca el sitio con los nombres viejos. En una prueba con MySQL del host, el corte fue de unos 7 segundos más el tiempo del respaldo y la importación.
+
+Cuando compruebes que todo funciona, borra lo viejo (base, usuario, tags de imagen y redes):
+
+```bash
+sudo ./scripts/stack.sh site-rename app.example.com --drop-old
+```
+
+Hasta ese momento puedes volver atrás a mano:
+
+```bash
+cd /opt/dockerws/sites/app.example.com
+sudo docker compose -p dws-app-example-com-2805 down   # Contenedores con el nombre nuevo
+sudo tar -xzf .rename-antes.tgz
+sudo rm .rename.json
+sudo /opt/dockerws/scripts/stack.sh site-up app.example.com
+```
+
+Los datos escritos después del renombrado quedan en la base nueva.
+
+No se renombran automáticamente:
+
+- **Bases PostgreSQL:** usa `--containers-only`, que cambia solo los contenedores.
+- **Bases con rutinas, triggers, vistas o eventos:** guardan el usuario viejo como `DEFINER`.
+- **Variables con el nombre de la base distintas de `DB_DATABASE` y `DB_USERNAME`** (por ejemplo, `DB_URL`): el plan las señala, y puedes cambiarlas a mano o usar `--containers-only`.
+- **Proyectos con volúmenes y un `compose.yaml` escrito en YAML** en lugar de JSON.
+
+Los respaldos anteriores registran el nombre viejo de la base, así que `restore.sh` no los acepta. Para usarlos, cárgalos con `stack.sh db-import SITIO ruta/database.sql.gz --confirm-overwrite`.

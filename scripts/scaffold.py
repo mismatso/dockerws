@@ -12,7 +12,7 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
-from registry import ROOT, settings, sites, validate
+from registry import ROOT, domain_valid, settings, sites, validate
 import envfiles
 import workers
 
@@ -31,6 +31,19 @@ def bind(source, target, readonly=True):
             "bind": {"create_host_path": False}}
 
 
+PROJECT_PREFIX = "dws-"  # Sitios creados antes usaban «dockerws-»; su compose.yaml lo conserva.
+SLUG_MAX = 23  # «dws_» + 23 + «_» + 4 = 32, el máximo de un usuario de MySQL.
+
+
+def derive_names(domain):
+    """ID del sitio y nombre de la base derivados del dominio, con un sufijo del hash para que sean únicos.
+
+    app.example.com → ("app-example-com-2805", "dws_app_example_com_2805"). Los dominios largos se recortan."""
+    suffix = hashlib.sha256(domain.encode()).hexdigest()[:4]
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", domain.lower()))[:SLUG_MAX].strip("-")
+    return f"{slug}-{suffix}", f"dws_{slug.replace('-', '_')}_{suffix}"
+
+
 def db_sql(row, password, host="%"):
     db = row["database"]
     name, user = db["name"], db["user"]
@@ -39,9 +52,11 @@ def db_sql(row, password, host="%"):
         return (f"CREATE ROLE {user} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE;\n"
                 f"CREATE DATABASE {name} OWNER {user};\n"
                 f"REVOKE ALL ON DATABASE {name} FROM PUBLIC;\n")
+    # En GRANT, «_» es un comodín en el nombre de la base: se escapa para que solo cubra la del sitio.
+    pattern = name.replace("_", r"\_")
     return (f"CREATE USER '{user}'@'{host}' IDENTIFIED BY '{password}';\n"
             f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
-            f"GRANT ALL PRIVILEGES ON `{name}`.* TO '{user}'@'{host}';\n")
+            f"GRANT ALL PRIVILEGES ON `{pattern}`.* TO '{user}'@'{host}';\n")
 
 
 def compose(row, cfg):
@@ -73,7 +88,7 @@ def compose(row, cfg):
             web["volumes"].append(bind("./app/wp-content/uploads", "/var/www/html/wp-content/uploads", False))
         else:
             web["volumes"].append(bind("./writable", "/var/www/writable", False))
-    result = {"name": "dockerws-" + row["id"], "services": {"web": web},
+    result = {"name": PROJECT_PREFIX + row["id"], "services": {"web": web},
               "networks": {"edge": {"external": True, "name": "dockerws-edge-" + row["id"]}}}
     if mode == "host":
         web["volumes"].append(bind(db["socket_dir"], "/run/host-db"))
@@ -112,13 +127,15 @@ def compose(row, cfg):
 
 def scaffold(args):
     cfg = settings()
-    digest = hashlib.sha256(args.domain.encode()).hexdigest()[:12]
-    ident = args.id or "s" + digest
+    if not domain_valid(args.domain):
+        raise ValueError("Dominio inválido; usar ASCII/punycode, sin URL ni wildcard")
+    default_id, db_name = derive_names(args.domain)
+    ident = args.id or default_id
     engine = args.database
     mode = args.db_mode or ("none" if engine == "none" else "file" if engine == "sqlite" else "container")
     row = {"schema": 1, "id": ident, "domain": args.domain, "aliases": args.alias,
            "kind": args.type, "php": args.php or cfg["php"],
-           "database": {"engine": engine, "mode": mode, "name": "dws" + digest, "user": "dws" + digest,
+           "database": {"engine": engine, "mode": mode, "name": db_name, "user": db_name,
                         "socket_dir": args.socket_dir or ("/var/run/postgresql" if engine == "postgres" else "/run/mysqld"),
                         "socket_name": args.socket_name, "port": args.db_port or (5432 if engine == "postgres" else 3306)}}
     validate(row)
@@ -131,6 +148,8 @@ def scaffold(args):
         raise ValueError("Alias duplicado")
     if target.exists() or target.is_symlink() or any(r["id"] == ident or set(names) & {r["domain"], *r["aliases"]} for r in existing):
         raise ValueError("El sitio, su ID o uno de los dominios ya existe; no se sobrescribe")
+    if any(r["database"]["name"] == db_name for r in existing):
+        raise ValueError(f"Ya existe la base {db_name}; no se sobrescribe")
     staging = Path(tempfile.mkdtemp(prefix=".new-", dir=ROOT / "sites"))
     try:
         for directory in ("app", "secrets", "data", "writable"):
@@ -203,6 +222,7 @@ def scaffold(args):
         shutil.rmtree(staging)
         raise
     print(f"Creado: {target}\nTipo: {args.type}; base de datos: {engine}/{mode}")
+    print(f"Contenedores: {PROJECT_PREFIX}{ident}-*" + (f"; base y usuario: {db_name}" if mode in ("host", "container") else ""))
     print("Las credenciales están en runtime.env y secrets/; no se imprimen ni se versionan.")
     if args.scheduler:
         print("Scheduler: servicio scheduler en compose.d/50-scheduler.yaml; no hace falta cron en el host.")

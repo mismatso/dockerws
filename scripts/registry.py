@@ -25,8 +25,8 @@ def domain_valid(name):
 def validate(row):
     if row.get("schema") != 1:
         raise ValueError("Versión de site.json desconocida")
-    if not re.fullmatch(r"[a-z][a-z0-9-]{0,29}", row["id"]):
-        raise ValueError("ID: 1–30 caracteres minúsculos, números y guiones; iniciar con letra")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,29}", row["id"]):
+        raise ValueError("ID: 1–30 caracteres minúsculos, números y guiones; iniciar con letra o número")
     if not all(domain_valid(d) for d in [row["domain"], *row["aliases"]]):
         raise ValueError("Dominio inválido; usar ASCII/punycode, sin URL ni wildcard")
     if row["kind"] not in ("wordpress", "laravel", "php", "static"):
@@ -46,7 +46,7 @@ def validate(row):
     if row["kind"] == "static" and db["engine"] != "none":
         raise ValueError("Un sitio estático no utiliza base de datos")
     for key in ("name", "user"):
-        if not re.fullmatch(r"[a-z][a-z0-9]{0,31}", db[key]):
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", db[key]):
             raise ValueError("Identificador SQL inválido")
     if not isinstance(db["port"], int) or not 1 <= db["port"] <= 65535:
         raise ValueError("Puerto inválido")

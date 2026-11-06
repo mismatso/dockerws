@@ -129,3 +129,23 @@ sudo /opt/dockerws/scripts/stack.sh status app.example.com
 ```
 
 `site-up` reconstruye la imagen y recrea `web` y los workers, que usan la misma imagen. PHP y sus extensiones siguen en la misma versión; cambian las bibliotecas del sistema (ICU, OpenSSL, libxml2, libzip, entre otras). Si el sitio usa una imagen propia (por ejemplo, un servicio `base` con `./image`), cambia el `FROM` de esa imagen. Para volver atrás, restaura `compose.yaml.bak` y ejecuta `site-up` otra vez.
+
+### Nombres legibles para sitios nuevos
+
+Los sitios nuevos toman su ID y el nombre de su base del dominio, con un sufijo corto del hash. Por ejemplo, `app.example.com` produce:
+
+- contenedores `dws-app-example-com-2805-web-1` y `dws-app-example-com-2805-db-1`;
+- base y usuario `dws_app_example_com_2805`.
+
+Antes eran `dockerws-sHASH-web-1` y `dwsHASH`, con 12 caracteres hexadecimales.
+
+Los sitios existentes no cambian y no requieren acción. `site.json` guarda el ID y la base, y `compose.yaml` conserva el nombre del proyecto (`dockerws-ID`). Para pasarlos a los nombres nuevos, usa `stack.sh site-rename` (ver [Adopción › Nombres legibles](ADOPTION.md#nombres-legibles)).
+
+Para saber a qué sitio pertenece cada contenedor existente:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Label "com.docker.compose.project.working_dir"}}'
+```
+
+En MySQL y MariaDB, el permiso de la base escapa `_` (`dws\_app\_…`). Sin ese escape, `_` actúa como comodín en `GRANT` y el permiso podría cubrir otras bases con nombres parecidos.
+
