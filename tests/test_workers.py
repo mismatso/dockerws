@@ -54,7 +54,7 @@ class SchedulerTests(SiteTestCase):
         self.assertEqual(service["env_file"], web["env_file"])
         self.assertEqual(service["networks"], {"edge": {}, "database": {}})
         self.assertEqual(service["healthcheck"], {"disable": True})
-        self.assertEqual(service["image"], f"dockerws-{registry.site('app.example.com')['id']}-web")
+        self.assertEqual(service["image"], "dws-app-example-com-2805-web")
         self.assertEqual(service["pull_policy"], "never")
         for key in ("build", "ports", "sysctls", "expose"):
             self.assertNotIn(key, service)

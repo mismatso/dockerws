@@ -117,7 +117,17 @@ sudo ./scripts/create-site.sh --domain www.example.com --type static
 
 Opciones adicionales: `--alias` (repetible), `--id`, `--php`, `--socket-dir`, `--socket-name`, `--db-port`, y `--scheduler` (solo Laravel: servicio `schedule:work`, sin cron en el host). El modo no interactivo solo genera archivos; usa `provision-host-db.sh` explícitamente si eliges el host. Puedes generar archivos sin root para revisarlos, pero en el servidor debes crearlos con sudo para asignar los permisos de escritura de la aplicación.
 
-Un dominio, alias o ID duplicado produce un error. No se sobrescriben sitios, contraseñas, bases o usuarios existentes. Los ID/nombres SQL se derivan del dominio y son independientes entre sitios.
+Un dominio, alias o ID duplicado produce un error. No se sobrescriben sitios, contraseñas, bases o usuarios existentes.
+
+El ID del sitio y el nombre de la base se derivan del dominio, con un sufijo de 4 caracteres del hash para que sean únicos. Por ejemplo, para `app.example.com`:
+
+| Recurso | Nombre |
+|---|---|
+| ID del sitio | `app-example-com-2805` |
+| Contenedores | `dws-app-example-com-2805-web-1`, `dws-app-example-com-2805-db-1` |
+| Base y usuario | `dws_app_example_com_2805` |
+
+Los dominios largos se recortan para que el usuario de MySQL no pase de 32 caracteres. `--id` cambia el ID y los nombres de los contenedores; la base sigue derivándose del dominio. Los sitios creados con versiones anteriores conservan sus nombres (`dockerws-sHASH-web-1`, `dwsHASH`).
 
 ## Estructura
 

@@ -43,6 +43,42 @@ class ProjectTests(SiteTestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(registry.sites()), 21)
 
+    def test_readable_names_derived_from_domain(self):
+        self.assertEqual(scaffold.derive_names("app.example.com"), ("app-example-com-2805", "dws_app_example_com_2805"))
+        # Dominios largos: el ID cabe en 30 caracteres y el usuario de MySQL en 32.
+        ident, db = scaffold.derive_names("tienda-online-de-ejemplo.example.com")
+        self.assertEqual((ident, db), ("tienda-online-de-ejempl-ef26", "dws_tienda_online_de_ejempl_ef26"))
+        self.assertLessEqual(len(db), 32)
+        self.assertEqual(scaffold.derive_names("1example.com")[0], "1example-com-e8c8")
+        row = self.create("app.example.com", "laravel", "mysql", "container")
+        self.assertEqual((row["id"], row["database"]["name"], row["database"]["user"]),
+                         ("app-example-com-2805", "dws_app_example_com_2805", "dws_app_example_com_2805"))
+        self.assertEqual(self.compose("app.example.com")["name"], "dws-app-example-com-2805")
+        env = (self.site_dir("app.example.com") / "runtime.env").read_text()
+        self.assertIn("DB_DATABASE=dws_app_example_com_2805\n", env)
+        # «_» es comodín en GRANT: se escapa para que el permiso cubra solo la base del sitio.
+        sql = (self.site_dir("app.example.com") / "secrets/init.sql").read_text()
+        self.assertIn("CREATE DATABASE `dws_app_example_com_2805`", sql)
+        self.assertIn(r"ON `dws\_app\_example\_com\_2805`.*", sql)
+        # --id solo cambia el ID (y el proyecto de Compose); la base sigue derivada del dominio.
+        row = self.create("blog.example.com", "php", extra=("--id", "blog"))
+        self.assertEqual(row["id"], "blog")
+        self.assertEqual(self.compose("blog.example.com")["name"], "dws-blog")
+        self.assertEqual(row["database"]["name"], scaffold.derive_names("blog.example.com")[1])
+
+    def test_legacy_names_remain_valid(self):
+        # Sitios creados con versiones anteriores: ID s+12 hex, base dws+12 hex y proyecto dockerws-ID.
+        row = self.create("legacy.example.com", "php", "mysql", "container")
+        path = self.site_dir("legacy.example.com")
+        legacy = {**row, "id": "s0123456789ab", "database": {**row["database"], "name": "dws0123456789ab",
+                                                             "user": "dws0123456789ab"}}
+        (path / "site.json").write_text(json.dumps(legacy))
+        compose = self.compose("legacy.example.com")
+        compose["name"] = "dockerws-s0123456789ab"
+        (path / "compose.yaml").write_text(json.dumps(compose))
+        self.assertEqual(registry.site("legacy.example.com")["id"], "s0123456789ab")
+        self.assertIn(r"ON `dws0123456789ab`.*", scaffold.db_sql(legacy, "x"))
+
     def test_php_image_debian_release(self):
         row = self.create("trixie.test", "php")
         web = json.loads((self.root / "sites" / row["domain"] / "compose.yaml").read_text())["services"]["web"]
