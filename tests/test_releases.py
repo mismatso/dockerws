@@ -198,17 +198,19 @@ class ReleaseTests(SiteTestCase):
         self.assertFalse(any(c.endswith("artisan up") for c in self.recorder.calls))
 
     def test_prune_keeps_recent_active_and_previous(self):
-        self.init()
+        # Nombres fijos, también para el release inicial: no dependen de la fecha en que corre la prueba.
+        with patch.object(releases, "new_name", return_value="20191231T000000Z"):
+            self.init()
         base = self.site / "releases"
         for day in range(1, 9):
-            (base / f"202611{day:02d}T000000Z").mkdir()
-        releases.switch(self.row, "20261102T000000Z")
-        releases.write_meta(base / "20261102T000000Z", {"previous": "20261101T000000Z"})
+            (base / f"202001{day:02d}T000000Z").mkdir()
+        releases.switch(self.row, "20200102T000000Z")
+        releases.write_meta(base / "20200102T000000Z", {"previous": "20200101T000000Z"})
         removed = releases.prune(self.row, 3)
         remaining = releases.names(self.row)
-        self.assertIn("20261102T000000Z", remaining)
-        self.assertIn("20261101T000000Z", remaining)
-        self.assertEqual(remaining[-3:], ["20261106T000000Z", "20261107T000000Z", "20261108T000000Z"])
+        self.assertIn("20200102T000000Z", remaining)
+        self.assertIn("20200101T000000Z", remaining)
+        self.assertEqual(remaining[-3:], ["20200106T000000Z", "20200107T000000Z", "20200108T000000Z"])
         self.assertTrue(removed)
         with self.assertRaises(ValueError):
             releases.prune(self.row, 1)
