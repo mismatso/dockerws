@@ -113,3 +113,19 @@ sudo ./scripts/stack.sh site app.example.com exec web php artisan tinker
 ```
 
 Para usar otro valor, pasa `-e HOME=…` después; Docker usa el último.
+
+### Imagen PHP sobre Debian 13 (trixie)
+
+Los sitios nuevos construyen la imagen PHP sobre `php:VERSIÓN-apache-trixie`. Antes usaban bookworm, aunque el host fuera Debian 13. La versión de Debian se configura con `php_debian` en `config/local.json`; por ejemplo, `"php_debian": "bookworm"` mantiene la anterior. El `Dockerfile` compila en las dos.
+
+Los sitios existentes no cambian: su `compose.yaml` fija `PHP_IMAGE` y el generador no lo sobrescribe. Para pasar un sitio a trixie:
+
+```bash
+cd /opt/dockerws/sites/app.example.com
+sudo cp compose.yaml compose.yaml.bak
+sudo sed -i 's/-apache-bookworm"/-apache-trixie"/' compose.yaml
+sudo /opt/dockerws/scripts/stack.sh site-up app.example.com
+sudo /opt/dockerws/scripts/stack.sh status app.example.com
+```
+
+`site-up` reconstruye la imagen y recrea `web` y los workers, que usan la misma imagen. PHP y sus extensiones siguen en la misma versión; cambian las bibliotecas del sistema (ICU, OpenSSL, libxml2, libzip, entre otras). Si el sitio usa una imagen propia (por ejemplo, un servicio `base` con `./image`), cambia el `FROM` de esa imagen. Para volver atrás, restaura `compose.yaml.bak` y ejecuta `site-up` otra vez.

@@ -43,6 +43,20 @@ class ProjectTests(SiteTestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(registry.sites()), 21)
 
+    def test_php_image_debian_release(self):
+        row = self.create("trixie.test", "php")
+        web = json.loads((self.root / "sites" / row["domain"] / "compose.yaml").read_text())["services"]["web"]
+        self.assertEqual(web["build"]["args"]["PHP_IMAGE"], "php:8.4-apache-trixie")
+        local = self.root / "config/local.json"
+        local.write_text(json.dumps({"php_debian": "bookworm"}))
+        row = self.create("bookworm.test", "php")
+        web = json.loads((self.root / "sites" / row["domain"] / "compose.yaml").read_text())["services"]["web"]
+        self.assertEqual(web["build"]["args"]["PHP_IMAGE"], "php:8.4-apache-bookworm")
+        local.write_text(json.dumps({"php_debian": "trixie;x"}))
+        with self.assertRaises(ValueError):
+            self.create("bad.test", "php")
+        self.assertFalse((self.root / "sites/bad.test").exists())
+
     def test_refuses_duplicate_domain_alias_and_id_without_rotating(self):
         row = self.create(engine="mysql")
         secret = self.root / "sites/example.test/runtime.env"

@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -58,7 +59,9 @@ def compose(row, cfg):
                    bind("./nginx.conf", "/etc/nginx/conf.d/default.conf")],
                    tmpfs=["/var/cache/nginx:rw,nosuid,size=32m", "/var/run:rw,nosuid,size=8m"])
     else:
-        web.update(build={"context": "../../images/php-apache", "args": {"PHP_IMAGE": f"php:{row['php']}-apache-bookworm"}},
+        if not re.fullmatch(r"[a-z]+", cfg["php_debian"]):
+            raise ValueError("php_debian debe ser el nombre de una versión de Debian (por ejemplo, trixie)")
+        web.update(build={"context": "../../images/php-apache", "args": {"PHP_IMAGE": f"php:{row['php']}-apache-{cfg['php_debian']}"}},
                    env_file=["./runtime.env", {"path": "./app.env", "required": False}], environment={"APP_DOCUMENT_ROOT": "/var/www/html/public" if kind == "laravel" else "/var/www/html"})
         web.update(user="33:33", cap_drop=["ALL"], sysctls={"net.ipv4.ip_unprivileged_port_start": "0"},
                    tmpfs=["/tmp:rw,nosuid,size=128m", "/var/run/apache2:rw,nosuid,uid=33,gid=33,size=8m",
