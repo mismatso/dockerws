@@ -34,6 +34,26 @@ proxy_compose() {
     docker compose --project-directory "$DOCKERWS_ROOT/proxy" \
         -f "$DOCKERWS_ROOT/proxy/compose.generated.yaml" "$@"
 }
+# Proyecto del proxy en instalaciones anteriores (contenedor dockerws-proxy-proxy-1).
+LEGACY_PROXY_PROJECT=dockerws-proxy
+# shellcheck disable=SC2120  # stack.sh pasa -a para incluir el contenedor detenido.
+legacy_proxy() {
+    docker ps -q "$@" --filter "label=com.docker.compose.project=$LEGACY_PROXY_PROJECT" \
+        --filter label=com.docker.compose.service=proxy
+}
+# Contenedor del proxy en marcha: el actual o, mientras no se reemplace con proxy-up --recreate, el antiguo.
+proxy_container() {
+    local id
+    id="$(proxy_compose ps -q proxy 2>/dev/null || true)"
+    [[ -n $id ]] || id="$(legacy_proxy)"
+    printf '%s\n' "$id"
+}
+proxy_exec() {
+    local container
+    container="$(proxy_container)"
+    [[ -n $container ]] || { echo 'El proxy no está en marcha; ejecuta stack.sh proxy-up.' >&2; return 1; }
+    docker exec "$container" "$@"
+}
 require_root() {
     if (( EUID != 0 )); then
         echo 'Este script debe ejecutarse como root en el servidor.' >&2

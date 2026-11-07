@@ -17,7 +17,10 @@ proxy = {"image": settings()["nginx_image"], "restart": "unless-stopped", "init"
          "healthcheck": {"test": ["CMD", "nginx", "-t"], "interval": "30s", "timeout": "5s", "retries": 3}}
 if networks:
     proxy["networks"] = list(networks)
-result = {"name": "dockerws-proxy", "services": {"proxy": proxy}, "networks": networks}
+# Nombre fijo y legible (docker ps muestra «dws-proxy»). Las instalaciones anteriores usaban el proyecto
+# «dockerws-proxy» (contenedor dockerws-proxy-proxy-1): proxy-up --recreate lo reemplaza.
+proxy["container_name"] = "dws-proxy"
+result = {"name": "dws-proxy", "services": {"proxy": proxy}, "networks": networks}
 temp = ROOT / "proxy/.compose.tmp"
 temp.write_text(json.dumps(result, indent=2) + "\n")
 os.replace(temp, ROOT / "proxy/compose.generated.yaml")

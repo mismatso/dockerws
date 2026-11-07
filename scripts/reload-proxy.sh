@@ -19,5 +19,5 @@ finish() {
 }
 trap finish EXIT
 python3 "$DOCKERWS_ROOT/scripts/render-proxy.py"
-proxy_compose exec -T proxy nginx -t
-proxy_compose exec -T proxy nginx -s reload
+proxy_exec nginx -t
+proxy_exec nginx -s reload
