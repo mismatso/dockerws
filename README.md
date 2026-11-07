@@ -96,7 +96,7 @@ Requisitos: Debian 13 o 12, acceso root, DNS público del dominio y puertos 80/4
 
    El cron lo ejecuta diariamente a las 02:15, hora del servidor. Conserva 30 días en `/var/backups/dockerws`, con directorios `0700` y archivos `0600`. Consulta [respaldos y restauración](docs/BACKUPS.md).
 
-Cada vez que agregues un sitio, ejecuta `proxy-up` para que Nginx se conecte a la nueva red. Si el proxy está corriendo, `proxy-up` conecta las redes nuevas con `docker network connect`, desconecta las de sitios eliminados, valida con `nginx -t` y recarga, sin recrear el contenedor ni cortar conexiones de los demás sitios. Esas conexiones persisten tras reiniciar el contenedor o el host. `proxy-up --recreate` recrea el proxy como antes; hace falta solo si cambias la imagen de Nginx o la definición del servicio (puertos, montajes). Las renovaciones de certificados usan una recarga, sin recrearlo.
+El contenedor del proxy se llama `dws-proxy`. Cada vez que agregues un sitio, ejecuta `proxy-up` para que Nginx se conecte a la nueva red. Si el proxy está corriendo, `proxy-up` conecta las redes nuevas con `docker network connect`, desconecta las de sitios eliminados, valida con `nginx -t` y recarga, sin recrear el contenedor ni cortar conexiones de los demás sitios. Esas conexiones persisten tras reiniciar el contenedor o el host. `proxy-up --recreate` recrea el proxy como antes; hace falta solo si cambias la imagen de Nginx o la definición del servicio (puertos, montajes). Las renovaciones de certificados usan una recarga, sin recrearlo.
 
 ## Uso no interactivo
 

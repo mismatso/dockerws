@@ -149,3 +149,24 @@ docker ps --format 'table {{.Names}}\t{{.Label "com.docker.compose.project.worki
 
 En MySQL y MariaDB, el permiso de la base escapa `_` (`dws\_app\_…`). Sin ese escape, `_` actúa como comodín en `GRANT` y el permiso podría cubrir otras bases con nombres parecidos.
 
+### Proxy `dws-proxy`
+
+El contenedor del proxy se llama ahora `dws-proxy` (proyecto de Compose `dws-proxy`). Antes era `dockerws-proxy-proxy-1`. En una instalación nueva, `proxy-up` lo crea con el nombre nuevo.
+
+En una instalación existente, el proxy anterior sigue funcionando hasta que decidas reemplazarlo:
+
+- `proxy-up` conecta las redes y recarga Nginx igual que antes, y avisa que el proxy aún no se reemplazó;
+- `reload-proxy.sh` (usado al emitir y renovar certificados) recarga el proxy que esté en marcha;
+- `stack.sh status` lo da por bueno.
+
+Para reemplazarlo, en un momento de poco tráfico:
+
+```bash
+sudo ./scripts/stack.sh proxy-up --recreate
+sudo ./scripts/stack.sh status
+```
+
+`--recreate` quita `dockerws-proxy-proxy-1` y crea `dws-proxy` con la misma configuración y los mismos certificados. Todos los sitios quedan sin servicio unos segundos. Las redes de los sitios (`dockerws-edge-ID`) no cambian.
+
+Si tienes scripts o un cron que usan el nombre del contenedor (por ejemplo, `docker exec dockerws-proxy-proxy-1 …`), cámbialos a `dws-proxy`, o mejor, a `stack.sh proxy exec proxy …`.
+

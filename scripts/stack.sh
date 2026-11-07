@@ -36,6 +36,18 @@ case "$command" in
         python3 "$DOCKERWS_ROOT/scripts/render-proxy.py"
         proxy_compose config --quiet
         container="$(proxy_compose ps -q proxy)"
+        legacy="$(legacy_proxy -a)"
+        if [[ -n $legacy ]]; then
+            if [[ $recreate == no && -z $container && -n $(legacy_proxy) ]]; then
+                # Proxy de una instalación anterior en marcha: se sigue usando hasta que el operador elija el corte.
+                container="$legacy"
+                echo "Aviso: el proxy sigue siendo dockerws-proxy-proxy-1. Para pasarlo a dws-proxy (corte de unos segundos en todos los sitios): stack.sh proxy-up --recreate" >&2
+            else
+                echo 'Proxy: se reemplaza dockerws-proxy-proxy-1 por dws-proxy'
+                docker rm -f "$legacy" >/dev/null
+                docker network rm "${LEGACY_PROXY_PROJECT}_default" >/dev/null 2>&1 || true
+            fi
+        fi
         if [[ $recreate == no && -n $container && $(docker inspect -f '{{.State.Running}}' "$container") == true ]]; then
             # Proxy en ejecución: conectar las redes nuevas sin recrearlo, para no cortar a los demás sitios.
             # docker network connect es persistente: sobrevive a reinicios del contenedor y del host.
@@ -49,8 +61,8 @@ case "$command" in
         else
             proxy_compose up -d --wait
         fi
-        proxy_compose exec -T proxy nginx -t
-        proxy_compose exec -T proxy nginx -s reload
+        proxy_exec nginx -t
+        proxy_exec nginx -s reload
         ;;
     site-up)
         require_root

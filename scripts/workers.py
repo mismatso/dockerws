@@ -240,6 +240,9 @@ def evaluate(expected, rows):
     return result
 
 
+LEGACY_PROXY_PROJECT = "dockerws-proxy"  # Instalaciones anteriores; proxy-up --recreate lo reemplaza por dws-proxy.
+
+
 def proxy_args():
     return ["docker", "compose", "--project-directory", str(ROOT / "proxy"),
             "-f", str(ROOT / "proxy/compose.generated.yaml")]
@@ -255,8 +258,13 @@ def status(rows, include_proxy=True):
         expected, idle = expected_services(config)
         for service in idle:
             print(f"-     {row['domain']} {service}: sin réplicas (solo imagen)")
-        ps = subprocess.run(args + ["ps", "--all", "--format", "json"], capture_output=True, text=True, check=True).stdout
-        for service, label, ok in evaluate(expected, parse_ps(ps)):
+        ps = parse_ps(subprocess.run(args + ["ps", "--all", "--format", "json"], capture_output=True, text=True,
+                                     check=True).stdout)
+        if row["domain"] == "proxy" and not ps:
+            # Proxy de una instalación anterior que todavía no se reemplazó: sigue sirviendo y no es una falla.
+            ps = parse_ps(subprocess.run(["docker", "compose", "-p", LEGACY_PROXY_PROJECT, "ps", "--all", "--format",
+                                          "json"], capture_output=True, text=True, check=True).stdout)
+        for service, label, ok in evaluate(expected, ps):
             failed |= not ok
             print(f"{'OK   ' if ok else 'FALLA'} {row['domain']} {service}: {label}")
     return int(failed)

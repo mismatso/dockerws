@@ -51,7 +51,8 @@ def main():
         run([sys.executable, str(root / "scripts/render-compose.py")])
         run([sys.executable, str(root / "scripts/render-proxy.py")], env=env)
         config = json.loads(proxy_path.read_text())
-        config["name"] = "dockerws-proxy-" + token
+        config["name"] = "dws-proxy-" + token
+        config["services"]["proxy"].pop("container_name")  # Nombre fijo: no debe chocar con un proxy real.
         config["services"]["proxy"]["ports"] = ["127.0.0.1::80", "127.0.0.1::443"]
         for volume in config["services"]["proxy"]["volumes"]:
             if volume["target"] == "/etc/letsencrypt":
