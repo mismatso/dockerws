@@ -47,7 +47,7 @@ def apache_rules(root, token, image, resources, scaffold, registry):
             assert result.stdout == f"{status} {body}", f"{url}: {result.stdout!r}"
 
     write({".env": "secreto", ".git/config": "secreto", "dump.sql": "secreto"})
-    network = "dockerws-edge-" + row["id"]
+    network = registry.edge_network(row)
     command = registry.compose_args(row)
     resources.append((command, network))
     run(["docker", "network", "create", network], stdout=subprocess.DEVNULL)
@@ -101,7 +101,7 @@ def main():
                 socket_target = "/var/run/postgresql" if engine == "postgres" else "/var/run/mysqld"
                 config["services"]["db"]["volumes"].append(scaffold.bind(str(socket_dir), socket_target, False))
                 (path / "compose.yaml").write_text(json.dumps(config))
-                network = "dockerws-edge-" + row["id"]
+                network = registry.edge_network(row)
                 command = registry.compose_args(row)
                 resources.append((command, network))
                 run(["docker", "network", "create", network], stdout=subprocess.DEVNULL)
@@ -142,7 +142,7 @@ echo "PDO y privilegios: OK\\n";
                 host_config = json.loads((host_path / "compose.yaml").read_text())
                 host_config["services"]["web"].pop("build")
                 host_config["services"]["web"]["image"] = image
-                host_network = "dockerws-edge-" + host_row["id"]
+                host_network = registry.edge_network(host_row)
                 host_command = registry.compose_args(host_row)
                 resources.append((host_command, host_network))
                 (host_path / "compose.yaml").write_text(json.dumps(host_config))

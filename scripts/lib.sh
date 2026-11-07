@@ -30,12 +30,13 @@ site_compose() {
     docker compose --project-directory "$DOCKERWS_ROOT/sites/$domain" \
         --env-file "$DOCKERWS_ROOT/sites/$domain/.env" "${files[@]}" "$@"
 }
-# Red frontal del sitio (dockerws-edge-ID), compartida con el proxy. Compose la declara external:
-# sin ella no arranca ni un "run" del sitio. Se crea si falta; si existe, debe ser de este sitio.
+# Red frontal del sitio (dws-ID-edge; dockerws-edge-ID en sitios anteriores), compartida con el proxy.
+# Compose la declara external: sin ella no arranca ni un "run" del sitio. Se crea si falta; si existe,
+# debe ser de este sitio.
 site_network() {
     local id network owner
     id="$(site_field "$1" id)"
-    network="dockerws-edge-$id"
+    network="$(python3 "$DOCKERWS_ROOT/scripts/registry.py" network "$1")"
     if docker network inspect "$network" >/dev/null 2>&1; then
         owner="$(docker network inspect -f '{{ index .Labels "org.dockerws.site" }}' "$network")"
         [[ $owner == "$id" ]] || { echo "La red $network ya existe y no pertenece a este sitio." >&2; return 1; }

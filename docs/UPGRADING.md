@@ -209,3 +209,31 @@ Cuando un nombre no resuelve, `--check` recuerda que el resolvedor del host pued
 ### `proxy-up --recreate` recrea siempre el proxy
 
 Antes, `proxy-up --recreate` ejecutaba `docker compose up` sin `--force-recreate`: si la definición del servicio no había cambiado (misma imagen, puertos y montajes), Compose conservaba el contenedor y el comando terminaba sin recrearlo. Ahora lo recrea siempre, como indica su descripción. Al reemplazar `dockerws-proxy-proxy-1` el resultado es el mismo que antes. Todos los sitios quedan sin servicio unos segundos: úsalo en un momento de poco tráfico. Sin `--recreate`, `proxy-up` no cambia.
+
+### Redes y volúmenes con el nombre del proyecto
+
+Las redes y los volúmenes de los sitios nuevos siguen el mismo patrón que sus contenedores, `PROYECTO-CLAVE`. Para `app.example.com`:
+
+- red frontal `dws-app-example-com-2805-edge`, guardada en `site.json` (campo `network`);
+- red interna de la base `dws-app-example-com-2805-database` y volumen `dws-app-example-com-2805-db-data`;
+- red `dws-app-example-com-2805-default`, que Compose solo crea si un servicio agregado a mano no declara redes.
+
+Antes eran `dockerws-edge-ID`, `PROYECTO_database`, `PROYECTO_db-data` y `PROYECTO_default`; en los sitios con ID antiguo, la red frontal mostraba el hash (`dockerws-edge-sHASH`).
+
+Los sitios existentes no cambian y no requieren acción: sin el campo `network`, siguen usando `dockerws-edge-ID`, y `proxy-up` maneja ambos nombres. Para pasar sus redes al patrón nuevo, usa `stack.sh site-rename`, que ahora también cambia las redes; en un sitio con nombres legibles solo cambia las redes (ver [Adopción › Nombres legibles](ADOPTION.md#nombres-legibles)). Hazlo de uno en uno: cada sitio queda sin servicio unos segundos mientras se recrean sus contenedores.
+
+```bash
+sudo ./scripts/stack.sh site-rename app.example.com            # Plan
+sudo ./scripts/stack.sh site-rename app.example.com --apply
+sudo ./scripts/stack.sh site-rename app.example.com --drop-old # Cuando todo funcione
+```
+
+Los volúmenes existentes conservan su nombre: Docker no permite renombrarlos, y copiarlos exige detener la base.
+
+Si `docker network ls` muestra una red `PROYECTO_default` en un sitio, algún servicio de un overlay o de `compose.yaml` no declara redes. Para ver cuál la usa:
+
+```bash
+sudo docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' dws-app-example-com-2805_default
+```
+
+No borres a mano una red a la que esté o haya estado conectado el proxy sin comprobar antes que no sea su red principal (`sudo docker inspect -f '{{.HostConfig.NetworkMode}}' dws-proxy`): sin ella, el proxy no vuelve a arrancar. `--drop-old` hace esa comprobación.

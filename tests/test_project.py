@@ -66,6 +66,34 @@ class ProjectTests(SiteTestCase):
         self.assertEqual(self.compose("blog.example.com")["name"], "dws-blog")
         self.assertEqual(row["database"]["name"], scaffold.derive_names("blog.example.com")[1])
 
+    def test_networks_and_volumes_follow_project_name(self):
+        # Todo recurso de Docker del sitio es PROYECTO-CLAVE, como los contenedores (Compose usaría PROYECTO_CLAVE).
+        row = self.create("app.example.com", "laravel", "mysql", "container")
+        self.assertEqual(row["network"], "dws-app-example-com-2805-edge")
+        self.assertEqual(registry.edge_network(row), "dws-app-example-com-2805-edge")
+        cfg = self.compose("app.example.com")
+        self.assertEqual({key: spec["name"] for key, spec in cfg["networks"].items()},
+                         {"edge": "dws-app-example-com-2805-edge", "default": "dws-app-example-com-2805-default",
+                          "database": "dws-app-example-com-2805-database"})
+        self.assertEqual(cfg["volumes"], {"db-data": {"name": "dws-app-example-com-2805-db-data"}})
+        # Sitio anterior, sin «network» en site.json: conserva dockerws-edge-ID.
+        path = self.site_dir("app.example.com")
+        legacy = {k: v for k, v in row.items() if k != "network"}
+        (path / "site.json").write_text(json.dumps(legacy))
+        self.assertEqual(registry.edge_network(registry.site("app.example.com")), "dockerws-edge-app-example-com-2805")
+        result = subprocess.run([sys.executable, str(self.root / "scripts/registry.py"), "network", "app.example.com"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.stdout, "dockerws-edge-app-example-com-2805\n")
+        for bad in ("Mayúsculas", "red;rm", "-edge"):
+            with self.assertRaisesRegex(ValueError, "Red frontal"):
+                registry.validate({**row, "network": bad})
+        # Dos sitios no pueden compartir la red frontal.
+        other = self.create("other.example.com", "php")
+        (self.site_dir("other.example.com") / "site.json").write_text(json.dumps({**other, "network": row["network"]}))
+        (path / "site.json").write_text(json.dumps(row))
+        with self.assertRaisesRegex(ValueError, "red"):
+            registry.sites()
+
     def test_legacy_names_remain_valid(self):
         # Sitios creados con versiones anteriores: ID s+12 hex, base dws+12 hex y proyecto dockerws-ID.
         row = self.create("legacy.example.com", "php", "mysql", "container")

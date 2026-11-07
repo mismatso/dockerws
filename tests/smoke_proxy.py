@@ -36,7 +36,7 @@ def main():
             shutil.copytree(PROJECT / name, root / name, ignore=shutil.ignore_patterns("__pycache__", "local.json", "compose.generated.yaml", "*.conf.tmp"))
         (root / "sites").mkdir()
         run([sys.executable, str(root / "scripts/scaffold.py"), "--domain", "static.example.test", "--type", "static", "--id", token])
-        network = "dockerws-edge-" + token
+        network = f"dws-{token}-edge"
         path = root / "sites/static.example.test"
         site = ["docker", "compose", "--project-directory", str(path), "-f", str(path / "compose.yaml")]
         proxy_path = root / "proxy/compose.generated.yaml"
