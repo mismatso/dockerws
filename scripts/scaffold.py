@@ -227,9 +227,10 @@ def scaffold(args):
     if args.scheduler:
         print("Scheduler: servicio scheduler en compose.d/50-scheduler.yaml; no hace falta cron en el host.")
     if args.type == "laravel":
-        print(f"Siguientes pasos: scripts/deploy.sh {args.domain} --from DIRECTORIO_DEL_CÓDIGO; scripts/stack.sh proxy-up")
+        first = f"scripts/deploy.sh {args.domain} --from DIRECTORIO_DEL_CÓDIGO"
     else:
-        print(f"Siguientes pasos: importar la aplicación; scripts/stack.sh site-up {args.domain}; scripts/stack.sh proxy-up")
+        first = f"importar la aplicación en app/; scripts/stack.sh site-up {args.domain}"
+    print(f"Siguientes pasos: {first}; scripts/stack.sh proxy-up; scripts/issue-cert.sh {args.domain} --check")
 
 
 def parser():

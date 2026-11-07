@@ -17,6 +17,50 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, **kwargs)
 
 
+def apache_rules(root, token, image, resources, scaffold, registry):
+    """/.well-known/ llega a la aplicación (archivo o front controller); ocultos y volcados siguen negados."""
+    domain = "rutas.example.test"
+    scaffold.scaffold(scaffold.parser().parse_args(["--domain", domain, "--id", token + "rutas",
+                                                    "--type", "php", "--database", "none"]))
+    row = registry.site(domain)
+    path = root / "sites" / domain
+    config = json.loads((path / "compose.yaml").read_text())
+    config["services"]["web"].pop("build")
+    config["services"]["web"]["image"] = image
+    (path / "compose.yaml").write_text(json.dumps(config))
+    app = path / "app"
+    (app / "index.php").write_text("<?php echo 'app:' . parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);\n")
+    # Front controller como el de Laravel: lo que no existe en disco va a index.php.
+    (app / ".htaccess").write_text("RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-d\n"
+                                   "RewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^ index.php [L]\n")
+    def write(files):
+        for name, text in files.items():
+            (app / name).parent.mkdir(mode=0o755, exist_ok=True)
+            (app / name).write_text(text)
+            (app / name).chmod(0o644)
+
+    def expect(cases):
+        check = ('$c = @file_get_contents("http://127.0.0.1" . $argv[1]); '
+                 'echo explode(" ", $http_response_header[0])[1], " ", $c;')
+        for url, (status, body) in cases.items():
+            result = run(command + ["exec", "-T", "web", "php", "-r", check, url], stdout=subprocess.PIPE, text=True)
+            assert result.stdout == f"{status} {body}", f"{url}: {result.stdout!r}"
+
+    write({".env": "secreto", ".git/config": "secreto", "dump.sql": "secreto"})
+    network = "dockerws-edge-" + row["id"]
+    command = registry.compose_args(row)
+    resources.append((command, network))
+    run(["docker", "network", "create", network], stdout=subprocess.DEVNULL)
+    run(command + ["up", "-d", "--wait", "--wait-timeout", "60", "web"])
+    # Sin .well-known/ en disco: es el caso de una ruta de la aplicación (security.txt de Laravel).
+    expect({"/.well-known/security.txt": (200, "app:/.well-known/security.txt"),
+            "/.env": (403, ""), "/.git/config": (403, ""), "/.htaccess": (403, ""), "/dump.sql": (403, "")})
+    write({".well-known/test.txt": "estatico", ".well-known/.oculto": "secreto"})
+    expect({"/.well-known/test.txt": (200, "estatico"), "/.well-known/.oculto": (403, "")})
+    run(command + ["down", "-v", "--remove-orphans"], stdout=subprocess.DEVNULL)
+    print("OK Apache: /.well-known/ llega a la aplicación; ocultos y volcados negados", flush=True)
+
+
 def main():
     if "--proxy-only" in sys.argv:
         run([sys.executable, str(PROJECT / "tests/smoke_proxy.py")])
@@ -37,6 +81,8 @@ def main():
         try:
             print("Construyendo PHP 8.4 con los tres controladores PDO…", flush=True)
             run(["docker", "build", "--quiet", "-t", image, str(root / "images/php-apache")])
+            print("Probando las reglas de acceso de Apache…", flush=True)
+            apache_rules(root, token, image, resources, scaffold, registry)
             for engine in ("mysql", "mariadb", "postgres"):
                 print(f"Probando {engine}: credenciales, PDO, backup y restore…", flush=True)
                 domain = engine + ".example.test"

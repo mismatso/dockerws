@@ -69,6 +69,20 @@ class AcmeTests(SiteTestCase):
         self.assertEqual(status, 0, lines)
         self.assertIn("192.0.2.10", lines[1])
 
+    def test_missing_dns_suggests_flushing_negative_cache(self):
+        missing = acme_check.socket.gaierror(acme_check.socket.EAI_NONAME, "Name or service not known")
+        with patch.object(acme_check, "resolve", side_effect=missing), \
+                patch.object(acme_check.shutil, "which", return_value="/usr/bin/resolvectl"):
+            status, lines = self.run_check(["www.example.com"])
+        self.assertEqual(status, 1)
+        self.assertIn("DNS sin respuesta (Name or service not known)", lines[1])
+        self.assertIn("TTL negativo", lines[2])
+        self.assertTrue(lines[3].endswith("resolvectl flush-caches"))
+        # Sin resolvectl no se sugiere el comando; con otro error de DNS no se habla de la caché.
+        self.assertNotIn("resolvectl", " ".join(acme_check.dns_hint("x", missing, which=lambda _: None)))
+        timeout = acme_check.socket.gaierror(acme_check.socket.EAI_AGAIN, "Temporary failure in name resolution")
+        self.assertEqual(acme_check.dns_hint("x", timeout), [])
+
     def test_issue_cert_arguments(self):
         """El correo es opcional y la forma anterior (dominio correo [--dry-run]) sigue válida."""
         bin_dir = self.root / "bin"

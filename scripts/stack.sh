@@ -2,20 +2,11 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 command="${1:-help}"
 networks() {
-    local domain id network owner
+    local domain domains
     # Evitar process substitution: un inventario inválido debe hacer fallar el comando.
-    local domains
     domains="$(python3 "$DOCKERWS_ROOT/scripts/registry.py" list)"
     while IFS= read -r domain; do
-        [[ -n $domain ]] || continue
-        id="$(site_field "$domain" id)"
-        network="dockerws-edge-$id"
-        if docker network inspect "$network" >/dev/null 2>&1; then
-            owner="$(docker network inspect -f '{{ index .Labels "org.dockerws.site" }}' "$network")"
-            [[ $owner == "$id" ]] || { echo "La red $network ya existe y no pertenece a este sitio." >&2; return 1; }
-        else
-            docker network create --label "org.dockerws.site=$id" "$network" >/dev/null
-        fi
+        [[ -z $domain ]] || site_network "$domain"
     done <<< "$domains"
 }
 case "$command" in
@@ -98,6 +89,7 @@ case "$command" in
         ;;
     site-composer)
         require_root
+        site_network "${2:?Falta dominio}"
         shift
         exec python3 "$DOCKERWS_ROOT/scripts/deploy.py" composer "$@"
         ;;
@@ -149,6 +141,7 @@ case "$command" in
         service="web"
         [[ ${3:-} != --service ]] || service="${4:?Falta servicio}"
         python3 "$DOCKERWS_ROOT/scripts/envfiles.py" check "$domain"
+        site_network "$domain"
         site_compose "$domain" config --quiet
         # Compose recrea los servicios cuyo entorno cambió (runtime.env o app.env).
         site_compose "$domain" up -d --no-build --wait

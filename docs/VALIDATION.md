@@ -24,6 +24,7 @@ También se valida el Compose del proxy con inventario vacío.
 - Construcción de la imagen PHP 8.4 con controladores PDO MySQL, PostgreSQL y SQLite.
 - MySQL 8.4, MariaDB 11.4 y PostgreSQL 17: volumen nuevo, cuenta de aplicación, conexión PDO y denegación de creación de otra base.
 - Arranque de Apache como UID 33 y respuesta HTTP real.
+- Reglas de acceso de Apache: `/.well-known/` llega a la aplicación (archivo o ruta del front controller); `.env`, `.htaccess`, `.git/`, `.well-known/.oculto` y volcados `.sql` devuelven 403.
 - Inserción de una fila, respaldo, eliminación, restauración y comprobación de su contenido en los tres motores.
 - Otro sitio conectado al mismo motor por socket Unix, incluyendo contraseña SCRAM en PostgreSQL.
 - Denegación de lectura entre bases en MySQL/MariaDB.

@@ -5,6 +5,7 @@ import argparse
 import http.client
 import os
 import secrets
+import shutil
 import socket
 import ssl
 import sys
@@ -76,6 +77,25 @@ def hint(hops, cloudflare):
     return ""
 
 
+# El resolvedor responde que el nombre no existe (NXDOMAIN) o que no tiene direcciones.
+NOT_FOUND = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
+
+
+def dns_hint(name, exc, which=None):
+    """Un registro recién creado puede seguir «sin respuesta» por la caché negativa del host."""
+    if exc.errno not in NOT_FOUND:
+        return []
+    lines = ["Si acabas de crear el registro, el resolvedor del host puede guardar la respuesta negativa durante "
+             "el TTL negativo de la zona (el mínimo del SOA, a menudo de 5 minutos a 1 hora). "
+             f"Compara con el DNS público: dig +short {name} @1.1.1.1"]
+    if (which or shutil.which)("resolvectl"):
+        lines.append("Si el DNS público ya responde, vacía la caché de systemd-resolved y repite --check: "
+                     "resolvectl flush-caches")
+    else:
+        lines.append("Si el DNS público ya responde, espera a que venza ese TTL o vacía la caché del resolvedor local.")
+    return lines
+
+
 def check(names, webroot=WEBROOT, local=("127.0.0.1", 80), public=True, fetcher=fetch, out=print):
     token = secrets.token_urlsafe(32)
     expected = f"{token}.dockerws-check".encode()
@@ -103,6 +123,8 @@ def check(names, webroot=WEBROOT, local=("127.0.0.1", 80), public=True, fetcher=
             except socket.gaierror as exc:
                 failed = True
                 out(f"FALLA público  {name}: DNS sin respuesta ({exc.strerror})")
+                for line in dns_hint(name, exc):
+                    out(f"      {line}")
                 continue
             ok, hops, cloudflare = follow(url, expected, fetcher)
             failed |= not ok

@@ -170,3 +170,38 @@ sudo ./scripts/stack.sh status
 
 Si tienes scripts o un cron que usan el nombre del contenedor (por ejemplo, `docker exec dockerws-proxy-proxy-1 …`), cámbialos a `dws-proxy`, o mejor, a `stack.sh proxy exec proxy …`.
 
+
+### `/.well-known/` llega a la aplicación
+
+Antes, la imagen PHP respondía 403 a cualquier ruta bajo `/.well-known/` que no existiera en disco, aunque la aplicación la atendiera. Por ejemplo, el `security.txt` de una ruta de Laravel (RFC 9116), `change-password`, `openid-configuration`, `assetlinks.json` o `apple-app-site-association`. La regla de Apache que niega los archivos ocultos se aplicaba al primer componente inexistente de la ruta, `.well-known`. Ahora esas peticiones llegan a `index.php`, igual que en el proxy, que ya dejaba pasar `/.well-known/`.
+
+Además, Apache niega ahora el contenido de cualquier directorio oculto dentro del código servido, por ejemplo `public/.git/config`. Antes solo lo bloqueaba el proxy. `.env`, `.htaccess`, `*.sql`, `composer.json` y los demás archivos ocultos siguen negados. El desafío ACME no cambia: Nginx lo atiende desde su webroot y no lo envía a la aplicación.
+
+Se aplica al reconstruir la imagen de cada sitio. `site-up` reconstruye y recrea solo el sitio indicado, sin tocar a los demás ni al proxy. Hazlo de uno en uno:
+
+```bash
+sudo ./scripts/stack.sh site-up app.example.com
+sudo ./scripts/stack.sh status app.example.com
+curl -I https://app.example.com/.well-known/security.txt
+```
+
+El siguiente `deploy.sh` del sitio también reconstruye la imagen. Después del cambio, `curl -I` debe devolver la respuesta de la aplicación (200, o 404 si no define esa ruta) en lugar de 403. Si el sitio usa una imagen propia (por ejemplo, un servicio `base` con `./image`), copia en ella el `apache.conf` nuevo.
+
+Si un sitio montaba su propio `000-default.conf` con un overlay para evitar el 403, por ejemplo `compose.d/70-apache-wellknown.yaml` con `apache/000-default.conf`, ya puede retirarlo después de reconstruir:
+
+```bash
+cd /opt/dockerws/sites/app.example.com
+sudo mv compose.d/70-apache-wellknown.yaml /root/70-apache-wellknown.yaml.bak
+sudo /opt/dockerws/scripts/stack.sh site-up app.example.com
+curl -I https://app.example.com/.well-known/security.txt
+```
+
+Si el resultado no es el esperado, devuelve el overlay a `compose.d/` y ejecuta `site-up` otra vez. Antes de retirarlo, compara ese `000-default.conf` con `images/php-apache/apache.conf` por si tenía otros cambios.
+
+### Primer despliegue sin `proxy-up` previo
+
+`deploy.sh` crea la red frontal del sitio (`dockerws-edge-ID`) si aún no existe, antes de respaldar o sincronizar. Antes, el primer `deploy.sh DOMINIO --from DIR` justo después de `create-site.sh` fallaba en composer con «network dockerws-edge-… declared as external, but could not be found», con el código ya copiado. Había que ejecutar antes `stack.sh networks` o `proxy-up`. `site-composer` y `env-reload` también la crean. La red lleva la misma etiqueta `org.dockerws.site` que crea `stack.sh networks`; si ya existe una red con ese nombre que no es del sitio, el comando se detiene sin tocar nada. No requiere acción.
+
+### `issue-cert.sh --check` y la caché DNS del host
+
+Cuando un nombre no resuelve, `--check` recuerda que el resolvedor del host puede guardar la respuesta negativa durante el TTL negativo de la zona y, si existe `resolvectl`, sugiere `resolvectl flush-caches`. No vacía la caché por su cuenta. Ver [Inicio rápido](../README.md#inicio-rápido).
