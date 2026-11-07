@@ -11,4 +11,7 @@ Uso: deploy.sh DOMINIO [--from DIR | --ref REF] [--skip-backup] [--no-migrate] [
 EOF
     exit 1
 }
+# Antes de respaldar o sincronizar: en el primer despliegue la red del sitio aún no existe
+# (la crean proxy-up, networks o site-up) y composer fallaría con el código ya copiado.
+site_network "$1"
 exec python3 "$DOCKERWS_ROOT/scripts/deploy.py" deploy "$@"

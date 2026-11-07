@@ -108,7 +108,7 @@ sudo ./scripts/deploy.sh app.example.com --ref main
 sudo ./scripts/deploy.sh app.example.com
 ```
 
-Antes de tocar el sitio, comprueba el origen, obtiene la referencia de git, construye la imagen y ejecuta el gancho `pre-deploy`. Si algo falla en esta etapa, el sitio sigue en línea sin cambios. Después, en Laravel:
+Antes de tocar el sitio, crea la red del sitio si aún no existe (primer despliegue), comprueba el origen, obtiene la referencia de git, construye la imagen y ejecuta el gancho `pre-deploy`. Si algo falla en esta etapa, el sitio sigue en línea sin cambios. Después, en Laravel:
 
 1. `artisan down --retry=60`, si `web` está corriendo;
 2. respaldo de la base del sitio (`backup.sh DOMINIO`), salvo con `--skip-backup` o si no hay base;

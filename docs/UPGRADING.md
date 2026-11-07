@@ -197,3 +197,7 @@ curl -I https://app.example.com/.well-known/security.txt
 ```
 
 Si el resultado no es el esperado, devuelve el overlay a `compose.d/` y ejecuta `site-up` otra vez. Antes de retirarlo, compara ese `000-default.conf` con `images/php-apache/apache.conf` por si tenía otros cambios.
+
+### Primer despliegue sin `proxy-up` previo
+
+`deploy.sh` crea la red frontal del sitio (`dockerws-edge-ID`) si aún no existe, antes de respaldar o sincronizar. Antes, el primer `deploy.sh DOMINIO --from DIR` justo después de `create-site.sh` fallaba en composer con «network dockerws-edge-… declared as external, but could not be found», con el código ya copiado. Había que ejecutar antes `stack.sh networks` o `proxy-up`. `site-composer` y `env-reload` también la crean. La red lleva la misma etiqueta `org.dockerws.site` que crea `stack.sh networks`; si ya existe una red con ese nombre que no es del sitio, el comando se detiene sin tocar nada. No requiere acción.

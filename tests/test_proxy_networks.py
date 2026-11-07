@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fase 6: proxy-up conecta redes nuevas sin recrear el proxy."""
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -61,6 +62,28 @@ class ProxyNetworkTests(SiteTestCase):
         result = self.bash("docker() { :; }; proxy_exec nginx -t", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("proxy-up", result.stderr)
+
+    def test_site_network_is_created_before_first_deploy(self):
+        row = self.create("app.example.com", "laravel")
+        network = "dockerws-edge-" + row["id"]
+        # docker simulado: la red no existe y se registra la creación.
+        fake = 'docker() { echo "$*" >> "$LOG"; [[ "$1 $2" != "network inspect" ]]; }; site_network app.example.com'
+        log = self.root / "docker.log"
+        self.bash(fake, env={**os.environ, "LOG": str(log)})
+        self.assertEqual(log.read_text().splitlines()[-1],
+                         f"network create --label org.dockerws.site={row['id']} {network}")
+        # Red con el nombre del sitio pero de otro dueño: no se usa.
+        other = 'docker() { [[ $* == *-f* ]] && echo otro; return 0; }; site_network app.example.com'
+        result = self.bash(other, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no pertenece a este sitio", result.stderr)
+        # deploy.sh la asegura antes de respaldar o sincronizar; site-composer y env-reload, antes de Compose.
+        deploy = (self.root / "scripts/deploy.sh").read_text()
+        self.assertLess(deploy.index('site_network "$1"'), deploy.index("exec python3"))
+        stack = (self.root / "scripts/stack.sh").read_text()
+        for command in ("site-composer)", "env-reload)"):
+            block = stack[stack.index(command):]
+            self.assertLess(block.index("site_network"), block.index(";;"), command)
 
 
 if __name__ == "__main__":
