@@ -205,3 +205,7 @@ Si el resultado no es el esperado, devuelve el overlay a `compose.d/` y ejecuta 
 ### `issue-cert.sh --check` y la caché DNS del host
 
 Cuando un nombre no resuelve, `--check` recuerda que el resolvedor del host puede guardar la respuesta negativa durante el TTL negativo de la zona y, si existe `resolvectl`, sugiere `resolvectl flush-caches`. No vacía la caché por su cuenta. Ver [Inicio rápido](../README.md#inicio-rápido).
+
+### `proxy-up --recreate` recrea siempre el proxy
+
+Antes, `proxy-up --recreate` ejecutaba `docker compose up` sin `--force-recreate`: si la definición del servicio no había cambiado (misma imagen, puertos y montajes), Compose conservaba el contenedor y el comando terminaba sin recrearlo. Ahora lo recrea siempre, como indica su descripción. Al reemplazar `dockerws-proxy-proxy-1` el resultado es el mismo que antes. Todos los sitios quedan sin servicio unos segundos: úsalo en un momento de poco tráfico. Sin `--recreate`, `proxy-up` no cambia.

@@ -63,6 +63,15 @@ class ProxyNetworkTests(SiteTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("proxy-up", result.stderr)
 
+    def test_recreate_forces_new_proxy_container(self):
+        # Sin --force-recreate, Compose conserva el contenedor si la definición no cambió.
+        stack = (self.root / "scripts/stack.sh").read_text()
+        block = stack[stack.index("    proxy-up)"):]
+        block = block[:block.index("\n        ;;")]
+        forced = block[block.index("$recreate == yes ]]; then"):]
+        self.assertIn("proxy_compose up -d --wait --force-recreate", forced[:forced.index("else")])
+        self.assertIn("proxy_compose up -d --wait\n", block)
+
     def test_site_network_is_created_before_first_deploy(self):
         row = self.create("app.example.com", "laravel")
         network = "dockerws-edge-" + row["id"]

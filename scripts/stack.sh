@@ -49,6 +49,9 @@ case "$command" in
                 echo "Proxy: $action $network"
                 docker network "$action" "$network" "$container"
             done <<< "$actions"
+        elif [[ $recreate == yes ]]; then
+            # Sin --force-recreate, Compose conserva el contenedor si la definición del servicio no cambió.
+            proxy_compose up -d --wait --force-recreate
         else
             proxy_compose up -d --wait
         fi
