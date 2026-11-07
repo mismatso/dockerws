@@ -77,6 +77,8 @@ Requisitos: Debian 13 o 12, acceso root, DNS público del dominio y puertos 80/4
 
    Todos los alias declarados también deben resolver al servidor. `--check` publica un token temporal en el webroot de ACME y lo pide para el dominio y cada alias, de dos formas: al proxy local y por el DNS público, siguiendo redirecciones como lo hace Let's Encrypt. Después lo borra. No contacta a Let's Encrypt, así que no depende del entorno staging ni consume límites. `--dry-run` sigue disponible y usa staging.
 
+   Si `--check` informa «DNS sin respuesta» para un registro que acabas de crear, el resolvedor del host puede tener guardada la respuesta negativa de una consulta anterior. La conserva durante el TTL negativo de la zona (el mínimo del SOA, a menudo de 5 minutos a 1 hora), aunque el DNS público ya responda. Compara con `dig +short www.example.com @1.1.1.1`; si ahí ya aparece, vacía la caché con `sudo resolvectl flush-caches` (systemd-resolved) y repite `--check`. `--check` lo sugiere, pero no vacía la caché por su cuenta.
+
    El correo es opcional (`issue-cert.sh example.com admin@example.com`). Let's Encrypt ya no envía avisos de vencimiento, y con una cuenta ya registrada en el servidor el correo no se usa. Antes de tener certificado, el sitio devuelve HTTP 503, excepto en el desafío ACME. Después redirige HTTP a HTTPS. El timer de Certbot renueva y su deploy-hook valida y recarga Nginx.
 
    **Con Cloudflare (proxy activado, nube naranja):**

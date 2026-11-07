@@ -201,3 +201,7 @@ Si el resultado no es el esperado, devuelve el overlay a `compose.d/` y ejecuta 
 ### Primer despliegue sin `proxy-up` previo
 
 `deploy.sh` crea la red frontal del sitio (`dockerws-edge-ID`) si aún no existe, antes de respaldar o sincronizar. Antes, el primer `deploy.sh DOMINIO --from DIR` justo después de `create-site.sh` fallaba en composer con «network dockerws-edge-… declared as external, but could not be found», con el código ya copiado. Había que ejecutar antes `stack.sh networks` o `proxy-up`. `site-composer` y `env-reload` también la crean. La red lleva la misma etiqueta `org.dockerws.site` que crea `stack.sh networks`; si ya existe una red con ese nombre que no es del sitio, el comando se detiene sin tocar nada. No requiere acción.
+
+### `issue-cert.sh --check` y la caché DNS del host
+
+Cuando un nombre no resuelve, `--check` recuerda que el resolvedor del host puede guardar la respuesta negativa durante el TTL negativo de la zona y, si existe `resolvectl`, sugiere `resolvectl flush-caches`. No vacía la caché por su cuenta. Ver [Inicio rápido](../README.md#inicio-rápido).
