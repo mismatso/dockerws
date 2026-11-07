@@ -2,10 +2,10 @@
 """Conecta el proxy solamente a las redes de los sitios registrados."""
 import json
 import os
-from registry import ROOT, settings, sites
+from registry import ROOT, edge_network, settings, sites
 from scaffold import LOGGING, bind
 
-networks = {"edge-" + row["id"]: {"external": True, "name": "dockerws-edge-" + row["id"]} for row in sites()}
+networks = {"edge-" + row["id"]: {"external": True, "name": edge_network(row)} for row in sites()}
 proxy = {"image": settings()["nginx_image"], "restart": "unless-stopped", "init": True,
          "ports": ["80:80", "443:443"], "read_only": True,
          "volumes": [bind("./nginx.conf", "/etc/nginx/nginx.conf"), bind("./conf.d", "/etc/nginx/conf.d"),

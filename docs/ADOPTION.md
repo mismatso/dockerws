@@ -110,9 +110,11 @@ Si `app/` era un checkout de git, crea el mirror (`git clone --mirror URL sites/
 Opcional. Pasa un sitio creado con versiones anteriores a los nombres que se derivan del dominio:
 
 - **contenedores e imágenes:** `dockerws-sHASH-*` → `dws-app-example-com-2805-*`;
+- **red frontal:** `dockerws-edge-ID` → `dws-app-example-com-2805-edge`;
+- **redes del proyecto** (`database` y, si algún servicio la usa, `default`): `PROYECTO_database` → `dws-app-example-com-2805-database`;
 - **base y usuario** (MySQL y MariaDB): `dwsHASH` → `dws_app_example_com_2805`.
 
-El ID de `site.json`, las redes del proxy y el alias `web-ID` no cambian: no se ven en `docker ps` y el proxy sigue igual. Antes de empezar, actualiza DockerWS en el servidor; las versiones anteriores no aceptan `_` en el nombre de la base.
+Los sitios creados con nombres legibles pero antes de la red `dws-ID-edge` (con red `dockerws-edge-app-example-com-2805`, por ejemplo) solo cambian las redes. El ID de `site.json` y el alias `web-ID` no cambian: no se ven en `docker ps` y la configuración de Nginx sigue igual. Los volúmenes conservan su nombre. Antes de empezar, actualiza DockerWS en el servidor; las versiones anteriores no aceptan `_` en el nombre de la base ni el campo `network` de `site.json`.
 
 ```bash
 sudo ./scripts/stack.sh site-rename app.example.com            # Solo muestra el plan
@@ -125,17 +127,19 @@ Sin `--apply` no cambia nada: muestra qué se renombra y avisa si un archivo de 
 `--apply`, en orden:
 
 1. Guarda una copia de `site.json`, `compose.yaml`, `compose.d/`, `runtime.env`, `app.env` y `secrets/init.sql` en `.rename-antes.tgz`.
-2. Cambia el nombre del proyecto en `compose.yaml` y `compose.d/`, incluidas las imágenes que lo usan (por ejemplo, el scheduler o un servicio `base`). Los volúmenes del proyecto viejo se declaran `external` con su nombre actual, así que los datos no se mueven.
-3. Construye las imágenes con el nombre nuevo mientras el sitio sigue en línea.
-4. Comienza el corte: quita los contenedores viejos.
-5. Con base MySQL o MariaDB:
+2. Crea la red frontal nueva y conecta el proxy, sin cortar el sitio. Cambia la red en `compose.yaml`, `compose.d/` y `site.json` (campo `network`), y da nombre explícito a las redes del proyecto.
+3. Cambia el nombre del proyecto en `compose.yaml` y `compose.d/`, incluidas las imágenes que lo usan (por ejemplo, el scheduler o un servicio `base`). Los volúmenes del proyecto viejo se declaran `external` con su nombre actual, así que los datos no se mueven.
+4. Construye las imágenes con el nombre nuevo mientras el sitio sigue en línea.
+5. Comienza el corte: quita los contenedores viejos (o detiene el sitio, si el proyecto ya tenía nombre legible).
+6. Con base MySQL o MariaDB:
    - hace un respaldo con `backup.sh`;
    - crea la base y el usuario nuevos con la misma contraseña;
    - actualiza `DB_DATABASE` y `DB_USERNAME`;
    - importa el respaldo y compara la cantidad de tablas.
-6. Arranca el sitio (si estaba en marcha) y, en Laravel con la configuración en caché, ejecuta `config:cache`.
+7. Arranca el sitio (si estaba en marcha) con contenedores nuevos en las redes nuevas y, en Laravel con la configuración en caché, ejecuta `config:cache`. Si estaba detenido, recrea sus contenedores sin arrancarlos.
+8. Regenera `proxy/compose.generated.yaml` con la red nueva. La configuración de Nginx no cambia y no hace falta `proxy-up`.
 
-Si algo falla, vuelve solo al estado anterior: borra la base y el usuario nuevos, restaura los archivos y arranca el sitio con los nombres viejos. En una prueba con MySQL del host, el corte fue de unos 7 segundos más el tiempo del respaldo y la importación.
+Si algo falla, vuelve solo al estado anterior: borra la base y el usuario nuevos, restaura los archivos, arranca el sitio con los nombres viejos y quita la red nueva. En una prueba con MySQL del host, el corte fue de unos 7 segundos más el tiempo del respaldo y la importación. Si solo cambian las redes, el corte es el de recrear los contenedores: unos 5 segundos en una prueba con un sitio PHP.
 
 Cuando compruebes que todo funciona, borra lo viejo (base, usuario, tags de imagen y redes):
 
@@ -151,15 +155,26 @@ sudo docker compose -p dws-app-example-com-2805 down   # Contenedores con el nom
 sudo tar -xzf .rename-antes.tgz
 sudo rm .rename.json
 sudo /opt/dockerws/scripts/stack.sh site-up app.example.com
+sudo /opt/dockerws/scripts/stack.sh proxy-up
+sudo docker network rm dws-app-example-com-2805-edge     # Red nueva, ya sin uso
 ```
 
 Los datos escritos después del renombrado quedan en la base nueva.
 
+`--drop-old` desconecta el proxy de la red frontal vieja y la borra, salvo que sea la red principal del contenedor del proxy (`docker inspect -f '{{.HostConfig.NetworkMode}}' dws-proxy`). Docker guarda ese nombre en el contenedor: si la red ya no existe, el proxy no vuelve a arrancar, ni siquiera al reiniciar el host, y `docker network connect` falla. En ese caso la red queda vacía y el comando lo indica. Bórrala después de recrear el proxy, en un momento de poco tráfico (todos los sitios quedan sin servicio unos segundos):
+
+```bash
+sudo ./scripts/stack.sh proxy-up --recreate
+sudo docker inspect -f '{{.HostConfig.NetworkMode}}' dws-proxy   # Ya no debe ser la red vieja
+sudo docker network rm dockerws-edge-ID
+```
+
 No se renombran automáticamente:
 
-- **Bases PostgreSQL:** usa `--containers-only`, que cambia solo los contenedores.
+- **Bases PostgreSQL:** usa `--containers-only`, que cambia los contenedores y las redes, pero no la base.
 - **Bases con rutinas, triggers, vistas o eventos:** guardan el usuario viejo como `DEFINER`.
 - **Variables con el nombre de la base distintas de `DB_DATABASE` y `DB_USERNAME`** (por ejemplo, `DB_URL`): el plan las señala, y puedes cambiarlas a mano o usar `--containers-only`.
-- **Proyectos con volúmenes y un `compose.yaml` escrito en YAML** en lugar de JSON.
+- **Proyectos con volúmenes y un `compose.yaml` escrito en YAML** en lugar de JSON. Si no tiene volúmenes, la red frontal sí cambia; las redes del proyecto conservan su nombre.
+- **Volúmenes:** Docker no permite renombrarlos y moverlos exige copiar los datos con la base detenida. Conservan su nombre; en los proyectos renombrados se declaran `external`.
 
 Los respaldos anteriores registran el nombre viejo de la base, así que `restore.sh` no los acepta. Para usarlos, cárgalos con `stack.sh db-import SITIO ruta/database.sql.gz --confirm-overwrite`.

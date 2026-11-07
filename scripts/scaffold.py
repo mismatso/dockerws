@@ -12,7 +12,7 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
-from registry import ROOT, domain_valid, settings, sites, validate
+from registry import ROOT, domain_valid, edge_network, settings, sites, validate
 import envfiles
 import workers
 
@@ -88,14 +88,18 @@ def compose(row, cfg):
             web["volumes"].append(bind("./app/wp-content/uploads", "/var/www/html/wp-content/uploads", False))
         else:
             web["volumes"].append(bind("./writable", "/var/www/writable", False))
-    result = {"name": PROJECT_PREFIX + row["id"], "services": {"web": web},
-              "networks": {"edge": {"external": True, "name": "dockerws-edge-" + row["id"]}}}
+    project = PROJECT_PREFIX + row["id"]
+    # Redes y volúmenes con nombre explícito PROYECTO-CLAVE, como los contenedores. Sin él, Compose usa
+    # PROYECTO_CLAVE. «default» solo se crea si un servicio agregado a mano no declara redes.
+    result = {"name": project, "services": {"web": web},
+              "networks": {"edge": {"external": True, "name": edge_network(row)},
+                           "default": {"name": project + "-default"}}}
     if mode == "host":
         web["volumes"].append(bind(db["socket_dir"], "/run/host-db"))
     elif mode == "file":
         web["volumes"].append(bind("./data/sqlite", "/var/lib/app-db", False))
     elif mode == "container":
-        result["networks"]["database"] = {"internal": True}
+        result["networks"]["database"] = {"internal": True, "name": project + "-database"}
         web["networks"]["database"] = {}
         web["depends_on"] = {"db": {"condition": "service_healthy"}}
         server = {"image": cfg[engine + "_image"], "restart": "unless-stopped",
@@ -104,7 +108,7 @@ def compose(row, cfg):
                   "secrets": ["db-root-password"],
                   "volumes": [bind("./secrets/init.sql", "/docker-entrypoint-initdb.d/10-app.sql")],
                   "healthcheck": {"interval": "10s", "timeout": "5s", "retries": 18, "start_period": "30s"}}
-        result["volumes"] = {"db-data": {}}
+        result["volumes"] = {"db-data": {"name": project + "-db-data"}}
         result["secrets"] = {"db-root-password": {"file": "./secrets/db-root-password"}}
         if engine == "postgres":
             server["environment"] = {"POSTGRES_PASSWORD_FILE": "/run/secrets/db-root-password",
@@ -133,8 +137,8 @@ def scaffold(args):
     ident = args.id or default_id
     engine = args.database
     mode = args.db_mode or ("none" if engine == "none" else "file" if engine == "sqlite" else "container")
-    row = {"schema": 1, "id": ident, "domain": args.domain, "aliases": args.alias,
-           "kind": args.type, "php": args.php or cfg["php"],
+    row = {"schema": 1, "id": ident, "network": f"{PROJECT_PREFIX}{ident}-edge",
+           "domain": args.domain, "aliases": args.alias, "kind": args.type, "php": args.php or cfg["php"],
            "database": {"engine": engine, "mode": mode, "name": db_name, "user": db_name,
                         "socket_dir": args.socket_dir or ("/var/run/postgresql" if engine == "postgres" else "/run/mysqld"),
                         "socket_name": args.socket_name, "port": args.db_port or (5432 if engine == "postgres" else 3306)}}

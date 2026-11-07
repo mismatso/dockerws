@@ -15,9 +15,10 @@ import workers
 class ProxyNetworkTests(SiteTestCase):
     def test_plan_connects_new_and_disconnects_only_removed_sites(self):
         actions = proxy_networks.plan(
-            ["dockerws-edge-a", "dockerws-edge-b"],
-            ["dockerws-edge-a", "dockerws-edge-viejo", "bridge", "otra-red", ""])
-        self.assertEqual(actions, [("connect", "dockerws-edge-b"), ("disconnect", "dockerws-edge-viejo")])
+            ["dockerws-edge-a", "dws-b-edge"],
+            ["dockerws-edge-a", "dockerws-edge-viejo", "dws-viejo-edge", "dws-c-database", "bridge", "otra-red", ""])
+        self.assertEqual(actions, [("connect", "dws-b-edge"), ("disconnect", "dockerws-edge-viejo"),
+                                   ("disconnect", "dws-viejo-edge")])
         self.assertEqual(proxy_networks.plan(["dockerws-edge-a"], ["dockerws-edge-a"]), [])
 
     def test_cli_reads_inventory(self):
@@ -25,7 +26,7 @@ class ProxyNetworkTests(SiteTestCase):
         result = subprocess.run([sys.executable, str(self.root / "scripts/proxy_networks.py")],
                                 input="dockerws-proxy_default\n", capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, f"connect dockerws-edge-{row['id']}\n")
+        self.assertEqual(result.stdout, f"connect dws-{row['id']}-edge\n")
 
 
     def test_generated_proxy_is_named_dws_proxy(self):
@@ -34,6 +35,12 @@ class ProxyNetworkTests(SiteTestCase):
         config = json.loads((self.root / "proxy/compose.generated.yaml").read_text())
         self.assertEqual(config["name"], "dws-proxy")
         self.assertEqual(config["services"]["proxy"]["container_name"], "dws-proxy")
+        self.assertEqual(config["networks"]["edge-" + row["id"]]["name"], f"dws-{row['id']}-edge")
+        # Un sitio anterior, sin «network» en site.json, sigue con dockerws-edge-ID.
+        path = self.site_dir("app.example.com") / "site.json"
+        path.write_text(json.dumps({k: v for k, v in row.items() if k != "network"}))
+        subprocess.run([sys.executable, str(self.root / "scripts/render-compose.py")], check=True)
+        config = json.loads((self.root / "proxy/compose.generated.yaml").read_text())
         self.assertEqual(config["networks"]["edge-" + row["id"]]["name"], "dockerws-edge-" + row["id"])
 
     def test_status_accepts_legacy_proxy_until_replaced(self):
@@ -63,9 +70,18 @@ class ProxyNetworkTests(SiteTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("proxy-up", result.stderr)
 
+    def test_recreate_forces_new_proxy_container(self):
+        # Sin --force-recreate, Compose conserva el contenedor si la definición no cambió.
+        stack = (self.root / "scripts/stack.sh").read_text()
+        block = stack[stack.index("    proxy-up)"):]
+        block = block[:block.index("\n        ;;")]
+        forced = block[block.index("$recreate == yes ]]; then"):]
+        self.assertIn("proxy_compose up -d --wait --force-recreate", forced[:forced.index("else")])
+        self.assertIn("proxy_compose up -d --wait\n", block)
+
     def test_site_network_is_created_before_first_deploy(self):
         row = self.create("app.example.com", "laravel")
-        network = "dockerws-edge-" + row["id"]
+        network = f"dws-{row['id']}-edge"
         # docker simulado: la red no existe y se registra la creación.
         fake = 'docker() { echo "$*" >> "$LOG"; [[ "$1 $2" != "network inspect" ]]; }; site_network app.example.com'
         log = self.root / "docker.log"

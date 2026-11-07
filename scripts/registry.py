@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LEGACY_EDGE = "dockerws-edge-"  # Red frontal de los sitios anteriores, hasta stack.sh site-rename.
 
 
 def settings():
@@ -27,6 +28,8 @@ def validate(row):
         raise ValueError("Versión de site.json desconocida")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,29}", row["id"]):
         raise ValueError("ID: 1–30 caracteres minúsculos, números y guiones; iniciar con letra o número")
+    if "network" in row and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", str(row["network"])):
+        raise ValueError("Red frontal inválida: minúsculos, números y guiones")
     if not all(domain_valid(d) for d in [row["domain"], *row["aliases"]]):
         raise ValueError("Dominio inválido; usar ASCII/punycode, sin URL ni wildcard")
     if row["kind"] not in ("wordpress", "laravel", "php", "static"):
@@ -56,8 +59,16 @@ def validate(row):
         raise ValueError("Nombre del socket inválido")
 
 
+def edge_network(row):
+    """Red frontal del sitio, compartida con el proxy.
+
+    Los sitios nuevos la guardan en site.json («network»: dws-ID-edge, como sus contenedores). Los
+    anteriores no tienen ese campo y usan dockerws-edge-ID hasta que stack.sh site-rename la cambia."""
+    return row.get("network") or LEGACY_EDGE + row["id"]
+
+
 def sites():
-    rows, ids, domains, db_names = [], set(), set(), set()
+    rows, ids, domains, db_names, networks = [], set(), set(), set(), set()
     for path in sorted((ROOT / "sites").glob("*/site.json")):
         if path.parent.name.startswith("."):
             continue  # El generador publica una carpeta .new-* mediante rename atómico.
@@ -65,10 +76,11 @@ def sites():
         validate(row)
         if path.parent.name != row["domain"] or path.parent.is_symlink():
             raise ValueError("Ruta de sitio incoherente o enlace simbólico")
-        if row["id"] in ids or row["database"]["name"] in db_names:
-            raise ValueError("ID o nombre de base de datos duplicado")
+        if row["id"] in ids or row["database"]["name"] in db_names or edge_network(row) in networks:
+            raise ValueError("ID, red o nombre de base de datos duplicado")
         ids.add(row["id"])
         db_names.add(row["database"]["name"])
+        networks.add(edge_network(row))
         for name in [row["domain"], *row["aliases"]]:
             if name in domains:
                 raise ValueError("Dominio o alias duplicado: " + name)
@@ -100,6 +112,8 @@ if __name__ == "__main__":
             for row in sites():
                 if len(sys.argv) < 3 or sys.argv[2] != "database" or row["database"]["engine"] != "none":
                     print(row["domain"])
+        elif sys.argv[1] == "network":
+            print(edge_network(site(sys.argv[2])))
         elif sys.argv[1] == "field":
             value = site(sys.argv[2])
             for key in sys.argv[3].split("."):
